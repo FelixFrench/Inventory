@@ -1,0 +1,16 @@
+[Unit]
+Description=Inventory FastAPI Server
+After=network.target
+
+[Service]
+Type=simple
+User=<service-user>
+WorkingDirectory=/home/<service-user>/repos/Inventory
+ExecStart=/home/<service-user>/repos/Inventory/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
