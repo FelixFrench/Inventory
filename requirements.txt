@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+alembic
+sqlalchemy
+requests
+evdev

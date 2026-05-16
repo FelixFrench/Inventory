@@ -1,1 +1,15 @@
+# Database files
+inventory.db
+inventory.db-wal
+inventory.db-shm
+
+# Python
 __pycache__/
+*.py[cod]
+.venv/
+
+# Alembic
+# (keep migrations, but ignore any local override configs)
+
+# OS
+.DS_Store
