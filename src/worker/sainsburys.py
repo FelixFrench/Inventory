@@ -1,3 +1,5 @@
+"""Sainsbury's grocery price lookup via the public GOL product API."""
+
 import logging
 import time
 
@@ -15,6 +17,7 @@ _INTER_PAGE_SLEEP = 0.5
 
 
 def _build_query(brand: str, name: str, weight_g: float) -> str:
+    """Return a search query string from product metadata, e.g. 'Heinz Baked Beans 415g'."""
     if weight_g == int(weight_g):
         weight_str = f"{int(weight_g)}g"
     else:
@@ -22,12 +25,14 @@ def _build_query(brand: str, name: str, weight_g: float) -> str:
     return f"{brand} {name} {weight_str}"
 
 
-def _ean_matches(barcode: str, eans: list) -> bool:
+def _ean_matches(barcode: str, eans: list[str]) -> bool:
+    """Return True if *barcode* matches any entry in *eans* after stripping leading zeros."""
     stripped = barcode.lstrip("0")
     return any(stripped == ean.lstrip("0") for ean in eans)
 
 
-def _extract_price(product: dict) -> dict | None:
+def _extract_price(product: dict[str, object]) -> dict | None:
+    """Parse a Sainsbury's product dict and return a normalised price dict, or None on failure."""
     retail_price = product.get("retail_price")
     if retail_price is None:
         logging.warning("Sainsbury's: retail_price missing on matched product")
