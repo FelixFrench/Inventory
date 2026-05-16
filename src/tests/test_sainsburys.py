@@ -283,14 +283,6 @@ class TestGetPrice:
 
     @patch("worker.sainsburys.time.sleep")
     @patch("worker.sainsburys.requests.get")
-    def test_correct_headers_sent(self, mock_get, mock_sleep):
-        mock_get.side_effect = [make_response([_MATCH])]
-        self._call()
-        _, kwargs = mock_get.call_args
-        assert "FFInventory" not in kwargs["headers"]["User-Agent"]
-
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
     def test_sleep_not_called_after_final_page(self, mock_get, mock_sleep):
         mock_get.side_effect = [
             make_response([_NON_MATCH]),

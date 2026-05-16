@@ -4,3 +4,4 @@ alembic
 sqlalchemy
 requests
 evdev
+httpx
