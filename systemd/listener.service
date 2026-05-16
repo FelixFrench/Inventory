@@ -9,9 +9,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=<service-user>
-WorkingDirectory=/home/<service-user>/repos/Inventory
-ExecStart=/home/<service-user>/repos/Inventory/.venv/bin/python -m src.listener.main
+User=felix
+WorkingDirectory=/home/felix/repos/Inventory
+ExecStart=/home/felix/repos/Inventory/.venv/bin/python -m src.listener.main
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
