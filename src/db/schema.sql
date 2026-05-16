@@ -1,4 +1,4 @@
--- FFInventory V1.0 Schema
+-- Inventory V1.0 Schema
 -- SQLite. WAL mode is enabled at connection time in db.py, not here.
 
 -- ---------------------------------------------------------------------------
