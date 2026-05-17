@@ -4,7 +4,7 @@ def get_inventory_report(db) -> dict:
         FROM inventory i
         JOIN product_variants pv ON pv.id = i.product_variant_id
         LEFT JOIN prices p ON p.product_variant_id = pv.id
-        ORDER BY LOWER(pv.name)
+        ORDER BY (i.quantity = 0), LOWER(pv.name)
     """).fetchall()
 
     items = []
