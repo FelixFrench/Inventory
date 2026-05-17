@@ -18,6 +18,8 @@ _INTER_PAGE_SLEEP = 0.5
 
 def _build_query(brand: str, name: str, weight_g: float) -> str:
     """Return a search query string from product metadata, e.g. 'Heinz Baked Beans 415g'."""
+    if weight_g is None:
+        return f"{brand} {name}"
     if weight_g == int(weight_g):
         weight_str = f"{int(weight_g)}g"
     else:

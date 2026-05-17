@@ -302,3 +302,10 @@ class TestGetPrice:
         mock_get.side_effect = [make_response([product_with_short_ean])]
         result = get_price("0000000171915", NAME, BRAND, WEIGHT)
         assert result is not None
+
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
+    def test_none_weight_does_not_raise(self, mock_get, mock_sleep):
+        mock_get.side_effect = [make_response([_MATCH])]
+        result = get_price(BARCODE, NAME, BRAND, None)
+        assert result == {"price_pence": 110, "price_type": "unit"}
