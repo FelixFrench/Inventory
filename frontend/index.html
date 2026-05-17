@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inventory — Mode</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #1a1a1a; min-height: 100vh; display: flex; flex-direction: column; }
+    header { background: #1a1a1a; color: #fff; padding: 16px 20px; font-size: 1.1rem; font-weight: 600; }
+    nav { background: #2a2a2a; display: flex; gap: 0; }
+    nav a { color: #ccc; text-decoration: none; padding: 12px 20px; font-size: 0.95rem; }
+    nav a:hover { background: #3a3a3a; color: #fff; }
+    nav a.active { color: #fff; border-bottom: 3px solid #4a9eff; }
+    main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 20px; gap: 32px; }
+    .mode-banner { width: 100%; max-width: 480px; border-radius: 16px; padding: 40px 24px; text-align: center; transition: background 0.3s; }
+    .mode-banner.mode-in { background: #2d7d46; }
+    .mode-banner.mode-out { background: #c0392b; }
+    .mode-label { color: #fff; font-size: 2rem; font-weight: 700; letter-spacing: 0.02em; }
+    .mode-sub { color: rgba(255,255,255,0.8); margin-top: 8px; font-size: 1rem; }
+    .toggle-btn { width: 100%; max-width: 480px; padding: 20px; font-size: 1.2rem; font-weight: 600; border: none; border-radius: 12px; cursor: pointer; transition: background 0.2s, transform 0.1s; min-height: 64px; }
+    .toggle-btn:active { transform: scale(0.98); }
+    .toggle-btn.to-out { background: #c0392b; color: #fff; }
+    .toggle-btn.to-in { background: #2d7d46; color: #fff; }
+    .toggle-btn:hover.to-out { background: #a93226; }
+    .toggle-btn:hover.to-in { background: #236b3a; }
+    .error-msg { color: #c0392b; background: #fdf0ef; border: 1px solid #f5c6c2; border-radius: 8px; padding: 12px 16px; width: 100%; max-width: 480px; font-size: 0.95rem; display: none; }
+    .loading { color: #666; font-size: 1.1rem; }
+  </style>
+</head>
+<body>
+  <header>Inventory</header>
+  <nav>
+    <a href="/" class="active">Mode</a>
+    <a href="/inventory.html">Inventory</a>
+    <a href="/low_stock.html">Low Stock</a>
+  </nav>
+  <main>
+    <div class="loading" id="loading">Loading...</div>
+    <div class="mode-banner" id="banner" style="display:none">
+      <div class="mode-label" id="mode-label"></div>
+      <div class="mode-sub" id="mode-sub"></div>
+    </div>
+    <button class="toggle-btn" id="toggle-btn" style="display:none" onclick="toggleMode()"></button>
+    <div class="error-msg" id="error-msg"></div>
+  </main>
+  <script>
+    const banner = document.getElementById('banner');
+    const label = document.getElementById('mode-label');
+    const sub = document.getElementById('mode-sub');
+    const btn = document.getElementById('toggle-btn');
+    const loading = document.getElementById('loading');
+    const errorMsg = document.getElementById('error-msg');
+
+    let currentMode = null;
+
+    function applyMode(mode) {
+      currentMode = mode;
+      if (mode === 'in') {
+        banner.className = 'mode-banner mode-in';
+        label.textContent = 'Scanning IN';
+        sub.textContent = 'Items are being added to inventory';
+        btn.textContent = 'Switch to OUT';
+        btn.className = 'toggle-btn to-out';
+      } else {
+        banner.className = 'mode-banner mode-out';
+        label.textContent = 'Scanning OUT';
+        sub.textContent = 'Items are being removed from inventory';
+        btn.textContent = 'Switch to IN';
+        btn.className = 'toggle-btn to-in';
+      }
+      loading.style.display = 'none';
+      banner.style.display = '';
+      btn.style.display = '';
+    }
+
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorMsg.style.display = '';
+    }
+
+    async function toggleMode() {
+      const next = currentMode === 'in' ? 'out' : 'in';
+      btn.disabled = true;
+      try {
+        const resp = await fetch('/mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: next }),
+        });
+        if (!resp.ok) throw new Error('Server error ' + resp.status);
+        const data = await resp.json();
+        applyMode(data.mode);
+        errorMsg.style.display = 'none';
+      } catch (e) {
+        showError('Failed to switch mode. Check connection and try again.');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    (async function init() {
+      try {
+        const resp = await fetch('/mode');
+        if (!resp.ok) throw new Error('Server error ' + resp.status);
+        const data = await resp.json();
+        applyMode(data.mode);
+      } catch (e) {
+        loading.style.display = 'none';
+        showError('Could not load current mode. Check connection.');
+      }
+    })();
+  </script>
+</body>
+</html>
