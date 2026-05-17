@@ -45,6 +45,7 @@ def lookup_barcode(barcode: str) -> dict | None:
     response = requests.get(
         f"https://world.openfoodfacts.org/api/v2/product/{barcode}",
         headers=_get_headers(),
+        params={"fields": "status,product_name,product_name_en,brands,product_quantity,product_quantity_unit,quantity"},
         timeout=10,
     )
     data = response.json()
