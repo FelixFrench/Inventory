@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock, call
-from worker.sainsburys import get_price, _build_query, _ean_matches, _extract_price
+from src.worker.sainsburys import get_price, _build_query, _ean_matches, _extract_price
 
 
 # ---------------------------------------------------------------------------
@@ -172,16 +172,16 @@ class TestGetPrice:
     def _call(self):
         return get_price(BARCODE, NAME, BRAND, WEIGHT)
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_ean_match_on_page_1_returns_price(self, mock_get, mock_sleep):
         mock_get.side_effect = [make_response([_MATCH])]
         result = self._call()
         assert result == {"price_pence": 110, "price_type": "unit"}
         assert mock_get.call_count == 1
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_ean_match_on_page_2_returns_price(self, mock_get, mock_sleep):
         mock_get.side_effect = [make_response([_NON_MATCH]), make_response([_MATCH])]
         result = self._call()
@@ -189,8 +189,8 @@ class TestGetPrice:
         assert mock_get.call_count == 2
         assert mock_sleep.call_count == 1
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_ean_match_on_page_3_returns_price(self, mock_get, mock_sleep):
         mock_get.side_effect = [
             make_response([_NON_MATCH]),
@@ -202,8 +202,8 @@ class TestGetPrice:
         assert mock_get.call_count == 3
         assert mock_sleep.call_count == 2
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_no_match_after_max_pages_returns_none(self, mock_get, mock_sleep):
         mock_get.side_effect = [
             make_response([_NON_MATCH]),
@@ -213,8 +213,8 @@ class TestGetPrice:
         assert self._call() is None
         assert mock_get.call_count == 3
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_empty_products_list_continues_to_next_page(self, mock_get, mock_sleep):
         mock_get.side_effect = [
             make_response([]),
@@ -225,20 +225,20 @@ class TestGetPrice:
         assert result == {"price_pence": 110, "price_type": "unit"}
         assert mock_get.call_count == 3
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_http_4xx_returns_none(self, mock_get, mock_sleep):
         mock_get.return_value = make_error_response(404)
         assert self._call() is None
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_http_5xx_returns_none(self, mock_get, mock_sleep):
         mock_get.return_value = make_error_response(500)
         assert self._call() is None
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_missing_products_key_returns_none(self, mock_get, mock_sleep):
         mock = MagicMock()
         mock.status_code = 200
@@ -246,8 +246,8 @@ class TestGetPrice:
         mock_get.return_value = mock
         assert self._call() is None
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_product_missing_eans_is_skipped(self, mock_get, mock_sleep):
         no_eans_product = {
             "product_uid": "x",
@@ -258,8 +258,8 @@ class TestGetPrice:
         result = self._call()
         assert result == {"price_pence": 110, "price_type": "unit"}
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_per_kg_product_returns_per_kg_price(self, mock_get, mock_sleep):
         per_kg = make_product(
             eans=[BARCODE],
@@ -269,8 +269,8 @@ class TestGetPrice:
         mock_get.side_effect = [make_response([per_kg])]
         assert self._call() == {"price_pence": 275, "price_type": "per_kg"}
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_correct_query_params_sent(self, mock_get, mock_sleep):
         mock_get.side_effect = [make_response([_MATCH])]
         self._call()
@@ -281,8 +281,8 @@ class TestGetPrice:
         assert params["page_size"] == 10
         assert params["sort_order"] == "FAVOURITES_FIRST"
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_sleep_not_called_after_final_page(self, mock_get, mock_sleep):
         mock_get.side_effect = [
             make_response([_NON_MATCH]),
@@ -292,8 +292,8 @@ class TestGetPrice:
         self._call()
         assert mock_sleep.call_count == 2
 
-    @patch("worker.sainsburys.time.sleep")
-    @patch("worker.sainsburys.requests.get")
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
     def test_zero_padded_barcode_matches(self, mock_get, mock_sleep):
         product_with_short_ean = make_product(
             eans=["171915"],
