@@ -1,0 +1,16 @@
+[Unit]
+Description=FFInventory Async Lookup Worker
+After=network.target
+
+[Service]
+Type=simple
+User=<service-user>
+WorkingDirectory=/home/<service-user>/repos/Inventory
+ExecStart=/home/<service-user>/repos/Inventory/.venv/bin/python -m src.worker.main
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

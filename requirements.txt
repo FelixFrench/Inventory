@@ -3,5 +3,6 @@ uvicorn[standard]
 alembic
 sqlalchemy
 requests
+python-dotenv
 evdev
 httpx
