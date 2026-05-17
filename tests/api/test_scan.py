@@ -115,6 +115,12 @@ def test_unknown_barcode_creates_pending_lookup(client, db):
     assert row is not None
     assert row["status"] == "pending"
 
+    bc_row = db.execute(
+        "SELECT product_variant_id FROM barcodes WHERE barcode = ?", (UNKNOWN_BARCODE,)
+    ).fetchone()
+    assert bc_row is not None
+    assert bc_row["product_variant_id"] is None
+
     inv_count = db.execute("SELECT COUNT(*) FROM inventory").fetchone()[0]
     assert inv_count == 0
 

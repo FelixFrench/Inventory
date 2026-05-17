@@ -58,6 +58,10 @@ def scan(body: ScanRequest, db: sqlite3.Connection = Depends(get_db)):
                 )
             else:
                 db.execute(
+                    "INSERT OR IGNORE INTO barcodes (barcode, retailer_id) VALUES (?, ?)",
+                    (body.barcode, retailer_id),
+                )
+                db.execute(
                     "INSERT OR IGNORE INTO pending_lookups (barcode, retailer_id, status) VALUES (?, ?, 'pending')",
                     (body.barcode, retailer_id),
                 )
