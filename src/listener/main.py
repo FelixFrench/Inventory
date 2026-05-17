@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 
 import httpx
@@ -6,7 +7,7 @@ import httpx
 from src.listener.scanner import find_scanner, read_barcodes
 from src.listener.validation import is_valid_barcode
 
-FASTAPI_URL              = "http://127.0.0.1:8000/scan"
+FASTAPI_URL              = os.environ.get("INVENTORY_API_URL", "http://127.0.0.1:8000/scan")
 RECONNECT_INITIAL_DELAY  = 2
 RECONNECT_MAX_DELAY      = 30
 RECONNECT_BACKOFF_FACTOR = 2

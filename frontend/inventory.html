@@ -43,7 +43,13 @@
     <div class="loading" id="loading">Loading</div>
     <div id="content" style="display:none"></div>
   </main>
+  <script src="/config.js"></script>
   <script>
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
     function pence(p) {
       return p != null ? '£' + (p / 100).toFixed(2) : '—';
     }
@@ -56,8 +62,8 @@
         const rows = data.items.map(item => `
           <tr>
             <td>
-              <div>${item.name ?? '—'}</div>
-              ${item.brand ? '<div class="brand">' + item.brand + '</div>' : ''}
+              <div>${esc(item.name) || '—'}</div>
+              ${item.brand ? '<div class="brand">' + esc(item.brand) + '</div>' : ''}
             </td>
             <td>${item.quantity}</td>
             <td>${pence(item.price_pence)}</td>
@@ -88,7 +94,7 @@
 
     (async function init() {
       try {
-        const resp = await fetch('/reports/inventory');
+        const resp = await fetch('/reports/inventory', { headers: { 'X-API-Key': API_KEY } });
         if (!resp.ok) throw new Error('Server error ' + resp.status);
         render(await resp.json());
       } catch (e) {

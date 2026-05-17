@@ -69,4 +69,4 @@ def scan(body: ScanRequest, db: sqlite3.Connection = Depends(get_db)):
         return ScanResponse(status="ok", direction=direction, known=known)
     except sqlite3.Error as e:
         logger.error("DB error during scan: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

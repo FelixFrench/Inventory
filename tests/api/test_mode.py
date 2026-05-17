@@ -3,7 +3,7 @@ import sqlite3
 import pytest
 from starlette.testclient import TestClient
 
-from src.api.dependencies import get_db
+from src.api.dependencies import get_db, verify_api_key
 from src.api.main import app
 
 SCHEMA = """
@@ -38,6 +38,7 @@ def client(db):
             pass
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[verify_api_key] = lambda: None
     yield TestClient(app)
     app.dependency_overrides.clear()
 

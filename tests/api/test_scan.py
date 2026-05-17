@@ -3,7 +3,7 @@ import sqlite3
 import pytest
 from starlette.testclient import TestClient
 
-from src.api.dependencies import get_db
+from src.api.dependencies import get_db, verify_api_key
 from src.api.main import app
 
 SCHEMA = """
@@ -41,6 +41,7 @@ def client(db):
             pass
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[verify_api_key] = lambda: None
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -162,3 +163,18 @@ def test_known_barcode_no_inventory_row_in(client, db):
         "SELECT quantity FROM inventory WHERE product_variant_id = 1"
     ).fetchone()["quantity"]
     assert qty == 1
+
+
+def test_barcode_non_numeric_returns_422(client):
+    resp = client.post("/scan", json={"barcode": "abc123"})
+    assert resp.status_code == 422
+
+
+def test_barcode_too_short_returns_422(client):
+    resp = client.post("/scan", json={"barcode": "1234567"})
+    assert resp.status_code == 422
+
+
+def test_barcode_too_long_returns_422(client):
+    resp = client.post("/scan", json={"barcode": "123456789012345"})
+    assert resp.status_code == 422

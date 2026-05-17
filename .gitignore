@@ -15,3 +15,4 @@ __pycache__/
 .DS_Store
 /.claude
 config.local.env
+frontend/config.js

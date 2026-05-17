@@ -1,9 +1,10 @@
-from pydantic import BaseModel
 from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class ScanRequest(BaseModel):
-    barcode: str
+    barcode: str = Field(pattern=r'^\d{8,14}$')
 
 
 class ScanResponse(BaseModel):

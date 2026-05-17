@@ -44,6 +44,7 @@
     <button class="toggle-btn" id="toggle-btn" style="display:none" onclick="toggleMode()"></button>
     <div class="error-msg" id="error-msg"></div>
   </main>
+  <script src="/config.js"></script>
   <script>
     const banner = document.getElementById('banner');
     const label = document.getElementById('mode-label');
@@ -85,7 +86,7 @@
       try {
         const resp = await fetch('/mode', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
           body: JSON.stringify({ mode: next }),
         });
         if (!resp.ok) throw new Error('Server error ' + resp.status);
@@ -101,7 +102,7 @@
 
     (async function init() {
       try {
-        const resp = await fetch('/mode');
+        const resp = await fetch('/mode', { headers: { 'X-API-Key': API_KEY } });
         if (!resp.ok) throw new Error('Server error ' + resp.status);
         const data = await resp.json();
         applyMode(data.mode);
