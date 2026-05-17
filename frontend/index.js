@@ -63,3 +63,5 @@ async function toggleMode() {
     showError('Could not load current mode. Check connection.');
   }
 })();
+
+btn.addEventListener('click', toggleMode);
