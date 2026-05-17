@@ -23,9 +23,6 @@ _GOOD_PRICE = {"price_pence": 85, "price_type": "unit"}
 def db():
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    # Create the stub parent table that product_variants references via FK,
-    # before enabling FK checking, so inserts with NULL canonical_product_id work.
-    conn.execute("CREATE TABLE canonical_products (id INTEGER PRIMARY KEY AUTOINCREMENT)")
     conn.execute("PRAGMA foreign_keys = ON")
     schema = _SCHEMA_PATH.read_text(encoding="utf-8")
     conn.executescript(schema)

@@ -15,6 +15,10 @@ CREATE TABLE retailers (
 -- Product data
 -- ---------------------------------------------------------------------------
 
+CREATE TABLE canonical_products (
+    id INTEGER PRIMARY KEY
+);
+
 -- One row per retailer-specific product variant.
 -- canonical_product_id is nullable; it will be populated when the canonical
 -- products layer is introduced in a future version.
