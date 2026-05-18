@@ -29,11 +29,13 @@ def compute_startup_sleep(last_done_queued_at: datetime | None, now: datetime) -
 
 def _mark_failed(db: sqlite3.Connection, barcode: str, retailer_id: int) -> None:
     try:
-        db.execute(
-            "UPDATE pending_lookups SET status='failed' WHERE barcode=? AND retailer_id=?",
-            (barcode, retailer_id),
-        )
-        db.commit()
+        with db:
+            cur = db.execute(
+                "UPDATE pending_lookups SET status='failed' WHERE barcode=? AND retailer_id=?",
+                (barcode, retailer_id),
+            )
+            if cur.rowcount == 0:
+                logger.warning(f"Barcode {barcode}: _mark_failed matched 0 rows — pending_lookups row absent")
     except sqlite3.Error as e:
         logger.error(f"Barcode {barcode}: could not mark failed — {e}")
 
@@ -90,10 +92,15 @@ def process_row(
             pv_id = cursor.lastrowid
 
             # 3. Update barcodes
-            db.execute(
+            cur = db.execute(
                 "UPDATE barcodes SET product_variant_id=? WHERE barcode=? AND retailer_id=?",
                 (pv_id, barcode, retailer_id),
             )
+            if cur.rowcount == 0:
+                raise sqlite3.OperationalError(
+                    f"UPDATE barcodes matched 0 rows for barcode={barcode!r} — "
+                    "barcodes row absent; data integrity error"
+                )
 
             # 4. Apply pending scan delta to inventory
             rows = db.execute(
@@ -129,10 +136,12 @@ def process_row(
                 )
 
             # 6. Mark done
-            db.execute(
+            cur = db.execute(
                 "UPDATE pending_lookups SET status='done' WHERE barcode=? AND retailer_id=?",
                 (barcode, retailer_id),
             )
+            if cur.rowcount == 0:
+                logger.warning(f"Barcode {barcode}: UPDATE pending_lookups status='done' matched 0 rows")
 
         price_pence = price["price_pence"] if price else None
         logger.info(f"Barcode {barcode}: lookup complete — name={result['name']}, price={price_pence}p")
@@ -140,11 +149,13 @@ def process_row(
     except sqlite3.Error as e:
         logger.error(f"Barcode {barcode}: database error — {e}", exc_info=True)
         try:
-            db.execute(
-                "UPDATE pending_lookups SET status='failed' WHERE barcode=? AND retailer_id=?",
-                (barcode, retailer_id),
-            )
-            db.commit()
+            with db:
+                cur = db.execute(
+                    "UPDATE pending_lookups SET status='failed' WHERE barcode=? AND retailer_id=?",
+                    (barcode, retailer_id),
+                )
+                if cur.rowcount == 0:
+                    logger.warning(f"Barcode {barcode}: error-handler UPDATE pending_lookups status='failed' matched 0 rows")
         except sqlite3.Error as e2:
             logger.error(f"Barcode {barcode}: could not mark failed after DB error — {e2}")
 

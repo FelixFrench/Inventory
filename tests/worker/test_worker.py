@@ -187,6 +187,35 @@ def test_sainsburys_exception_still_marks_done(db):
 # Startup recovery sleep
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# rowcount / integrity checks
+# ---------------------------------------------------------------------------
+
+def test_missing_barcodes_row_marks_failed_and_rolls_back(db):
+    """UPDATE barcodes matching 0 rows should roll back the whole transaction
+    (no orphaned product_variant) and mark pending_lookups as failed."""
+    db.execute(
+        "INSERT INTO pending_lookups (barcode, retailer_id, queued_at, status) VALUES (?, ?, ?, 'pending')",
+        (_BARCODE, _RETAILER_ID, _QUEUED_AT),
+    )
+    db.commit()
+
+    with patch("src.worker.main.off.lookup_barcode", return_value=_GOOD_OFF), \
+         patch("src.worker.main.sainsburys.get_price", return_value=_GOOD_PRICE):
+        process_row(_BARCODE, _RETAILER_ID, _QUEUED_AT, db=db)
+
+    # Transaction rolled back — product_variant INSERT must have been undone
+    assert db.execute("SELECT COUNT(*) FROM product_variants").fetchone()[0] == 0
+
+    # pending_lookups should be marked failed by the error handler
+    pl = db.execute("SELECT status FROM pending_lookups WHERE barcode=?", (_BARCODE,)).fetchone()
+    assert pl["status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# Startup recovery sleep
+# ---------------------------------------------------------------------------
+
 def test_restart_recovery_sleep():
     now = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC)
 
