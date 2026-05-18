@@ -1,0 +1,4 @@
+# Install: sudo cp 99-inventory-scanner.rules /etc/udev/rules.d/
+#          sudo udevadm control --reload-rules && sudo udevadm trigger
+#          sudo usermod -aG input <service-user>
+SUBSYSTEM=="input", ATTRS{idVendor}=="05e0", ATTRS{idProduct}=="1200", GROUP="input", MODE="0660"

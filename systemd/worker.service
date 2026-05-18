@@ -1,0 +1,21 @@
+[Unit]
+Description=FFInventory Async Lookup Worker
+After=network.target fastapi.service
+
+[Service]
+Type=simple
+User=felix
+WorkingDirectory=/home/felix/repos/Inventory
+ExecStart=/home/felix/repos/Inventory/.venv/bin/python -m src.worker.main
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/home/felix/repos/Inventory
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+# Replace <service-user> with the actual system user before installing.
+# Install: sudo cp listener.service /etc/systemd/system/
+#          sudo systemctl daemon-reload
+#          sudo systemctl enable --now listener
+
+[Unit]
+Description=Inventory USB Barcode Listener
+After=network.target fastapi.service
+
+[Service]
+Type=simple
+User=felix
+WorkingDirectory=/home/felix/repos/Inventory
+ExecStart=/home/felix/repos/Inventory/.venv/bin/python -m src.listener.main
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/home/felix/repos/Inventory
+
+[Install]
+WantedBy=multi-user.target
