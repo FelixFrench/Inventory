@@ -162,14 +162,19 @@ Inventory/
 │   │   ├── main.py             # Run loop, reconnect logic, HTTP posting
 │   │   ├── scanner.py          # Device enumeration and barcode reconstruction
 │   │   └── validation.py       # is_valid_barcode()
-│   └── worker/
-│       ├── main.py             # Poll loop, process_row, startup sleep
-│       ├── off.py              # OpenFoodFacts client
-│       └── sainsburys.py       # Sainsbury's price lookup
+│   ├── worker/
+│   │   ├── main.py             # Poll loop, process_row, startup sleep
+│   │   ├── off.py              # OpenFoodFacts client
+│   │   └── sainsburys.py       # Sainsbury's price lookup
+│   └── tests/
+│       └── test_sainsburys.py  # Sainsbury's scraper tests (collected from src/)
 ├── frontend/
 │   ├── index.html              # Mode toggle
+│   ├── index.js
 │   ├── inventory.html          # Inventory report
+│   ├── inventory.js
 │   ├── low_stock.html          # Low stock report
+│   ├── low_stock.js
 │   ├── config.example.js       # API key template (copy to config.js and fill in key)
 │   └── config.js               # Not committed — contains API_KEY
 ├── systemd/
@@ -178,9 +183,13 @@ Inventory/
 │   ├── worker.service
 │   └── 99-inventory-scanner.rules
 ├── tests/
+│   ├── conftest.py
 │   ├── api/
 │   ├── listener/
 │   └── worker/
+├── scripts/
+│   └── wipe_db.sh
+├── phase5_prototype.py
 ├── config.local.env            # Not committed — contains OFF_CONTACT_EMAIL, INVENTORY_API_KEY
 ├── requirements.txt
 └── alembic.ini
@@ -195,7 +204,7 @@ Inventory/
 pytest
 ```
 
-105 tests across all modules. `src/tests/test_sainsburys.py` lives under `src/` and is only collected when running `pytest` from the repo root with no path argument.
+110 tests across all modules. `src/tests/test_sainsburys.py` lives under `src/` and is only collected when running `pytest` from the repo root with no path argument.
 
 ---
 
