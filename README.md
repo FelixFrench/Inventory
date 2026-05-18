@@ -225,11 +225,7 @@ sqlite3 ~/repos/Inventory/inventory.db "SELECT * FROM pending_lookups;"
 sqlite3 ~/repos/Inventory/inventory.db "SELECT * FROM scan_events ORDER BY id DESC LIMIT 10;"
 
 # Reset database (development only)
-sudo systemctl stop fastapi worker listener
-rm ~/repos/Inventory/inventory.db
-sudo systemctl start fastapi
-sleep 3
-sudo systemctl start worker listener
+~/repos/Inventory/scripts/wipe_db.sh
 ```
 
 ---
