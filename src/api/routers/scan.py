@@ -25,6 +25,8 @@ def scan(body: ScanRequest, db: sqlite3.Connection = Depends(get_db)):
             retailer = db.execute(
                 "SELECT id FROM retailers WHERE name = ?", ("Sainsbury's",)
             ).fetchone()
+            if retailer is None:
+                raise HTTPException(status_code=500, detail="Sainsbury's retailer not configured")
             retailer_id = retailer["id"]
 
             db.execute(

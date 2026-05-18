@@ -178,3 +178,11 @@ def test_barcode_too_short_returns_422(client):
 def test_barcode_too_long_returns_422(client):
     resp = client.post("/scan", json={"barcode": "123456789012345"})
     assert resp.status_code == 422
+
+
+def test_missing_retailer_returns_500(client, db):
+    db.execute("DELETE FROM retailers WHERE name = 'Sainsbury''s'")
+    db.commit()
+
+    resp = client.post("/scan", json={"barcode": UNKNOWN_BARCODE})
+    assert resp.status_code == 500
