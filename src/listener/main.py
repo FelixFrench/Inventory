@@ -2,6 +2,8 @@ import logging
 import os
 import time
 
+logger = logging.getLogger(__name__)
+
 import httpx
 
 from src.listener.scanner import find_scanner, read_barcodes
@@ -22,9 +24,9 @@ def post_scan(barcode: str) -> None:
     try:
         response = httpx.post(FASTAPI_URL, json={"barcode": barcode}, headers={"X-API-Key":INVENTORY_API_KEY}, timeout=5)
         if not (200 <= response.status_code < 300):
-            logging.warning("POST %s returned HTTP %s", FASTAPI_URL, response.status_code)
+            logger.warning("POST %s returned HTTP %s", FASTAPI_URL, response.status_code)
     except httpx.HTTPError as e:
-        logging.warning("POST %s failed: %s", FASTAPI_URL, e)
+        logger.warning("POST %s failed: %s", FASTAPI_URL, e)
 
 
 def _reconnect():
@@ -33,7 +35,7 @@ def _reconnect():
         time.sleep(delay)
         device = find_scanner()
         if device is not None:
-            logging.info("Scanner reconnected")
+            logger.info("Scanner reconnected")
             return device
         delay = min(delay * RECONNECT_BACKOFF_FACTOR, RECONNECT_MAX_DELAY)
 
@@ -43,22 +45,22 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
-    logging.info("Inventory listener starting")
+    logger.info("Inventory listener starting")
 
     device = find_scanner()
     if device is None:
-        logging.warning("Scanner not found at startup, entering reconnect loop")
+        logger.warning("Scanner not found at startup, entering reconnect loop")
         device = _reconnect()
 
     while True:
         try:
             for barcode in read_barcodes(device):
                 if is_valid_barcode(barcode):
-                    logging.info("Scanned: %s", barcode)
+                    logger.info("Scanned: %s", barcode)
                     post_scan(barcode)
         except OSError as e:
             if e.errno == 19:
-                logging.warning("Scanner disconnected")
+                logger.warning("Scanner disconnected")
                 device = _reconnect()
             else:
                 raise

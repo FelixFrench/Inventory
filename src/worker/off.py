@@ -2,6 +2,7 @@
 
 import os
 import re
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
@@ -12,7 +13,7 @@ _headers: dict | None = None
 def _get_headers() -> dict:
     global _headers
     if _headers is None:
-        load_dotenv("config.local.env")
+        load_dotenv(Path(__file__).parents[2] / "config.local.env")
         email = os.environ.get("OFF_CONTACT_EMAIL")
         if not email:
             raise RuntimeError("OFF_CONTACT_EMAIL not set in config.local.env")

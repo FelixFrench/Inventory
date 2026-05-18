@@ -1,5 +1,4 @@
-import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 from src.worker.sainsburys import get_price, _build_query, _ean_matches, _extract_price
 
 

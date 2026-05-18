@@ -1,6 +1,6 @@
 import logging
 import sqlite3
-from datetime import datetime, timezone, UTC
+from datetime import datetime, UTC
 
 from fastapi import APIRouter, Depends, HTTPException
 

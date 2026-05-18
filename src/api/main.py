@@ -49,4 +49,6 @@ app.include_router(scan.router,    dependencies=[Depends(verify_api_key)])
 app.include_router(mode.router,    dependencies=[Depends(verify_api_key)])
 app.include_router(reports.router, dependencies=[Depends(verify_api_key)])
 
+# Must remain after all include_router() calls — FastAPI matches routes in
+# registration order and this catch-all would shadow any router added after it.
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")

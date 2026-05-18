@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
@@ -13,14 +14,17 @@ from src.db.db import get_connection
 from src.worker import off
 from src.worker import sainsburys
 
-log = logging.getLogger("worker")
+logger = logging.getLogger(__name__)
+
+POLL_INTERVAL_SECS = 5   # seconds between polling pending_lookups when queue is empty
+OFF_RATE_LIMIT_SECS = 4  # minimum gap between OpenFoodFacts requests
 
 
 def compute_startup_sleep(last_done_queued_at: datetime | None, now: datetime) -> float:
     if last_done_queued_at is None:
         return 0.0
     elapsed = (now - last_done_queued_at).total_seconds()
-    return max(0.0, 4.0 - elapsed)
+    return max(0.0, float(OFF_RATE_LIMIT_SECS) - elapsed)
 
 
 def _mark_failed(db: sqlite3.Connection, barcode: str, retailer_id: int) -> None:
@@ -31,7 +35,7 @@ def _mark_failed(db: sqlite3.Connection, barcode: str, retailer_id: int) -> None
         )
         db.commit()
     except sqlite3.Error as e:
-        log.error(f"Barcode {barcode}: could not mark failed — {e}")
+        logger.error(f"Barcode {barcode}: could not mark failed — {e}")
 
 
 def process_row(
@@ -47,17 +51,17 @@ def process_row(
     try:
         result = off.lookup_barcode(barcode)
     except requests.RequestException as e:
-        log.warning(f"Barcode {barcode}: network error — {e}")
+        logger.warning(f"Barcode {barcode}: network error — {e}")
         _mark_failed(db, barcode, retailer_id)
         return
 
     if result is None:
-        log.info(f"Barcode {barcode}: not found on OpenFoodFacts")
+        logger.info(f"Barcode {barcode}: not found on OpenFoodFacts")
         _mark_failed(db, barcode, retailer_id)
         return
 
     if result["name"] is None:
-        log.info(f"Barcode {barcode}: no product name — cannot query Sainsbury's")
+        logger.info(f"Barcode {barcode}: no product name — cannot query Sainsbury's")
         _mark_failed(db, barcode, retailer_id)
         return
 
@@ -70,7 +74,7 @@ def process_row(
             weight_g=result["weight_g"],
         )
     except Exception as e:
-        log.warning(f"Barcode {barcode}: Sainsbury's error — {e}")
+        logger.warning(f"Barcode {barcode}: Sainsbury's error — {e}")
         price = None
 
     # Steps 2–6 — all DB writes in a single transaction
@@ -105,7 +109,7 @@ def process_row(
                 "INSERT INTO inventory (product_variant_id, quantity, minimum_quantity) VALUES (?, ?, 0)",
                 (pv_id, quantity),
             )
-            log.info(
+            logger.info(
                 f"Barcode {barcode}: inventory initialised at {quantity}"
                 f" (delta from {n_events} scan events)"
             )
@@ -131,10 +135,10 @@ def process_row(
             )
 
         price_pence = price["price_pence"] if price else None
-        log.info(f"Barcode {barcode}: lookup complete — name={result['name']}, price={price_pence}p")
+        logger.info(f"Barcode {barcode}: lookup complete — name={result['name']}, price={price_pence}p")
 
     except sqlite3.Error as e:
-        log.error(f"Barcode {barcode}: database error — {e}", exc_info=True)
+        logger.error(f"Barcode {barcode}: database error — {e}", exc_info=True)
         try:
             db.execute(
                 "UPDATE pending_lookups SET status='failed' WHERE barcode=? AND retailer_id=?",
@@ -142,11 +146,11 @@ def process_row(
             )
             db.commit()
         except sqlite3.Error as e2:
-            log.error(f"Barcode {barcode}: could not mark failed after DB error — {e2}")
+            logger.error(f"Barcode {barcode}: could not mark failed after DB error — {e2}")
 
 
 def main() -> None:
-    load_dotenv("config.local.env")
+    load_dotenv(Path(__file__).parents[2] / "config.local.env")
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         level=logging.INFO,
@@ -154,9 +158,6 @@ def main() -> None:
     )
 
     db = get_connection()
-
-    row = db.execute("SELECT id FROM retailers WHERE name=?", ("Sainsbury's",)).fetchone()
-    retailer_id: int = row["id"]
 
     # Restart recovery: if we just processed a row, honour the 4s inter-request gap
     last_done = db.execute(
@@ -169,10 +170,10 @@ def main() -> None:
             last_done_dt = last_done_dt.replace(tzinfo=UTC)
     sleep_secs = compute_startup_sleep(last_done_dt, datetime.now(UTC))
     if sleep_secs > 0:
-        log.info(f"Startup recovery: sleeping {sleep_secs:.1f}s to honour OFF rate limit")
+        logger.info(f"Startup recovery: sleeping {sleep_secs:.1f}s to honour OFF rate limit")
         time.sleep(sleep_secs)
 
-    log.info("Worker started")
+    logger.info("Worker started")
     while True:
         pending = db.execute(
             "SELECT barcode, retailer_id, queued_at FROM pending_lookups"
@@ -180,7 +181,7 @@ def main() -> None:
         ).fetchone()
 
         if pending is None:
-            time.sleep(5)
+            time.sleep(POLL_INTERVAL_SECS)
             continue
 
         process_row(
@@ -189,7 +190,7 @@ def main() -> None:
             queued_at=pending["queued_at"],
             db=db,
         )
-        time.sleep(4)
+        time.sleep(OFF_RATE_LIMIT_SECS)
 
 
 if __name__ == "__main__":
