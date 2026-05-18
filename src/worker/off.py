@@ -49,6 +49,7 @@ def lookup_barcode(barcode: str) -> dict | None:
         params={"fields": "status,product_name,product_name_en,brands,product_quantity,product_quantity_unit,quantity"},
         timeout=10,
     )
+    response.raise_for_status()
     data = response.json()
 
     if data.get("status") != 1:

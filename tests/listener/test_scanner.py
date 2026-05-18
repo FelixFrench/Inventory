@@ -162,6 +162,7 @@ def test_read_barcodes_oserror_propagates():
 # post_scan (imported from main)
 # ---------------------------------------------------------------------------
 
+@patch("src.listener.main.INVENTORY_API_KEY", "test-api-key")
 @patch("src.listener.main.httpx.post")
 def test_post_scan_success(mock_post):
     mock_response = MagicMock()
@@ -173,6 +174,24 @@ def test_post_scan_success(mock_post):
     mock_post.assert_called_once_with(
         "http://127.0.0.1:8000/scan",
         json={"barcode": "12345678"},
+        headers={"X-API-Key": "test-api-key"},
+        timeout=5,
+    )
+
+
+@patch("src.listener.main.INVENTORY_API_KEY", None)
+@patch("src.listener.main.httpx.post")
+def test_post_scan_with_no_api_key(mock_post):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+
+    post_scan("12345678")
+
+    mock_post.assert_called_once_with(
+        "http://127.0.0.1:8000/scan",
+        json={"barcode": "12345678"},
+        headers={},
         timeout=5,
     )
 

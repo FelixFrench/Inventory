@@ -160,3 +160,14 @@ def test_lookup_propagates_request_exception():
         off_module._headers = None
         with pytest.raises(requests.RequestException):
             lookup_barcode("1234567890123")
+
+
+def test_lookup_raises_http_error_on_5xx():
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.side_effect = requests.HTTPError("503 Server Error")
+    with patch("requests.get", return_value=mock_resp), \
+         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
+        off_module._headers = None
+        with pytest.raises(requests.HTTPError):
+            lookup_barcode("1234567890123")
+    off_module._headers = None

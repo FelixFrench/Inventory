@@ -22,7 +22,8 @@ INVENTORY_API_KEY = os.environ.get("INVENTORY_API_KEY")
 
 def post_scan(barcode: str) -> None:
     try:
-        response = httpx.post(FASTAPI_URL, json={"barcode": barcode}, headers={"X-API-Key":INVENTORY_API_KEY}, timeout=5)
+        headers = {"X-API-Key": INVENTORY_API_KEY} if INVENTORY_API_KEY is not None else {}
+        response = httpx.post(FASTAPI_URL, json={"barcode": barcode}, headers=headers, timeout=5)
         if not (200 <= response.status_code < 300):
             logger.warning("POST %s returned HTTP %s", FASTAPI_URL, response.status_code)
     except httpx.HTTPError as e:

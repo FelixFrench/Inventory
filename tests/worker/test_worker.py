@@ -149,6 +149,16 @@ def test_off_network_error_marks_failed(db):
     assert pl["status"] == "failed"
 
 
+def test_off_http_error_marks_failed(db):
+    _seed(db)
+    with patch("src.worker.main.off.lookup_barcode",
+               side_effect=requests.HTTPError("503 Server Error")):
+        process_row(_BARCODE, _RETAILER_ID, _QUEUED_AT, db=db)
+
+    pl = db.execute("SELECT status FROM pending_lookups WHERE barcode=?", (_BARCODE,)).fetchone()
+    assert pl["status"] == "failed"
+
+
 # ---------------------------------------------------------------------------
 # Sainsbury's failure paths
 # ---------------------------------------------------------------------------
