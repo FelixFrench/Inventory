@@ -1,7 +1,7 @@
 import logging
 import sqlite3
 
-from fastapi import APIRouter, Depends, WebSocket
+from fastapi import APIRouter, Depends
 
 from src.api.dependencies import get_db
 from src.api.models import ModeRequest, ModeResponse
@@ -25,9 +25,3 @@ def set_mode(body: ModeRequest, db: sqlite3.Connection = Depends(get_db)):
             (body.mode,),
         )
     return ModeResponse(mode=body.mode)
-
-
-@router.websocket("/ws")
-async def websocket_stub(websocket: WebSocket):
-    await websocket.accept()
-    await websocket.close()
