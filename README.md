@@ -1,4 +1,4 @@
-# Inventory
+# Inventory v1.0.0
 
 A barcode-driven grocery inventory system running on a Raspberry Pi 4B. Scan items in and out with a USB barcode scanner; product names, brands, and prices are resolved automatically in the background.
 
