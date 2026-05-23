@@ -7,4 +7,5 @@ python-dotenv
 evdev
 httpx
 pytest
-
+types-requests
+mypy

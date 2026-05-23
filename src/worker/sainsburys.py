@@ -2,6 +2,7 @@
 
 import logging
 import time
+from typing import Any
 
 import requests
 
@@ -33,7 +34,7 @@ def _ean_matches(barcode: str, eans: list[str]) -> bool:
     return any(stripped == ean.lstrip("0") for ean in eans)
 
 
-def _extract_price(product: dict[str, object]) -> dict | None:
+def _extract_price(product: dict[str, Any]) -> dict | None:
     """Parse a Sainsbury's product dict and return a normalised price dict, or None on failure."""
     retail_price = product.get("retail_price")
     if retail_price is None:
@@ -92,7 +93,7 @@ def get_price(barcode: str, name: str, brand: str, weight_g: float) -> dict | No
                 "page_number": page,
                 "page_size": _PAGE_SIZE,
                 "sort_order": "FAVOURITES_FIRST",
-            },
+            },  # type: ignore[arg-type]
             timeout=_TIMEOUT,
         )
 
