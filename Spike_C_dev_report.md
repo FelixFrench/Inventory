@@ -8,6 +8,7 @@
 | Screen 2 — Active scan-in session | Green-tinted banner showing session type, item count, and End session button; feed rows with inline ± quantity controls and one unresolved "loading…" row. |
 | Screen 3 — End session strip | Same as Screen 2 with feed content dimmed and an inline bottom strip containing summary text, Confirm, and Discard buttons. |
 | Screen 4 — Discard confirmation modal | Centred overlay modal with title, body text, and "Yes, discard" / "Keep session" buttons over dimmed feed content. |
+| Screen 5 — End session strip (lookups pending) | Same as Screen 3 but with Confirm button greyed out and showing "loading…", illustrating the blocked state while product lookups are still in progress. |
 
 ---
 
@@ -36,6 +37,8 @@ All seven pre-agreed decisions (D1–D7) were implemented. No deviations.
 3. **Quantity controls at zero delta.** If the user taps − on a row already at a delta of 0 within a scan-in session, the resulting −1 delta may be confusing. The mockup does not address this. Phase 1 should decide whether the − button is disabled at 0, or whether negative deltas are permitted within a scan-in session (e.g. to correct a double-scan).
 
 4. **Crash recovery surface.** If a session is active at unexpected shutdown and resumes at power-up, does the feed page need a visual indicator distinguishing a *recovered* session from a newly started one? The mockup does not model this state. The answer may affect the session model and banner copy in Phase 1.
+
+5. **Banner count semantics: units vs. products.** The mockup uses "units" throughout (banner: "Scan in — 5 units"; strip: "Add 5 units to inventory?") where 5 is the sum of all session deltas across 3 distinct barcodes. An alternative is to show distinct product count in the banner (e.g. "Scan in — 3 products") and total units only in the strip. Phase 1 must settle the canonical count shown in the banner before implementing the session model.
 
 ---
 

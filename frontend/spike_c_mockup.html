@@ -180,11 +180,17 @@
     /* ── Feed rows ── */
     .feed-row {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
+      flex-direction: column;
       padding: 10px 12px;
       border-bottom: 1px solid #e8e8e8;
       background: #fff;
+    }
+
+    .feed-row-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
     }
 
     .feed-item-name {
@@ -193,48 +199,25 @@
       color: #1a1a1a;
     }
 
-    .feed-item-brand {
+    .feed-item-meta {
       font-size: 0.72rem;
       color: #666;
-      margin-top: 2px;
+      margin-top: 3px;
     }
 
-    .feed-item-name.loading,
-    .feed-item-brand.loading {
+    .feed-delta {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #3B6D11;
+      flex-shrink: 0;
+    }
+
+    .loading {
       color: #aaa;
       font-style: italic;
     }
 
-    /* ── Quantity controls ── */
-    .qty-controls {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      flex-shrink: 0;
-    }
-
-    .qty-btn {
-      background: #f0f0f0;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      width: 24px;
-      height: 24px;
-      font-size: 0.95rem;
-      cursor: default;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .qty-count {
-      font-size: 0.82rem;
-      font-weight: 600;
-      min-width: 24px;
-      text-align: center;
-      color: #3B6D11;
-    }
-
-    /* ── Dim overlay (Screen 3 & 4) ── */
+    /* ── Dim overlay (Screens 3, 4, 5) ── */
     .dim-overlay {
       position: absolute;
       inset: 0;
@@ -242,7 +225,7 @@
       z-index: 1;
     }
 
-    /* ── Bottom strip (Screen 3) ── */
+    /* ── Bottom strip (Screens 3 & 5) ── */
     .bottom-strip {
       position: absolute;
       bottom: 0;
@@ -276,6 +259,11 @@
       font-size: 0.8rem;
       font-weight: 600;
       cursor: default;
+    }
+
+    .btn-confirm-disabled {
+      background: #ccc;
+      color: #888;
     }
 
     .btn-discard-strip {
@@ -371,7 +359,7 @@
 
 <h1 class="page-title">Spike C — Session UI Flow Mockup</h1>
 <p class="page-desc">
-  Static annotated mockup for V1.1.0. Four screens showing the session state machine on the
+  Static annotated mockup for V1.1.0. Five screens showing the session state machine on the
   feed page (<code>/feed</code>). Pure HTML/CSS — no JavaScript. For developer reference
   before Phase 1/2 implementation.
 </p>
@@ -385,10 +373,10 @@
     <div class="phone-frame">
       <div class="phone-header">Inventory</div>
       <nav class="phone-nav">
-        <a href="#">Mode</a>
         <a href="#">Inventory</a>
         <a href="#">Low Stock</a>
         <a href="#" class="active">Feed</a>
+        <a href="#">Unresolved</a>
       </nav>
       <div class="phone-banner idle">
         <span class="banner-label">No active session</span>
@@ -416,109 +404,90 @@
     <div class="phone-frame">
       <div class="phone-header">Inventory</div>
       <nav class="phone-nav">
-        <a href="#">Mode</a>
         <a href="#">Inventory</a>
         <a href="#">Low Stock</a>
         <a href="#" class="active">Feed</a>
+        <a href="#">Unresolved</a>
       </nav>
       <div class="phone-banner scan-in">
-        <span class="banner-label">Scan in — 3 items</span>
+        <span class="banner-label">Scan in — 5 units</span>
         <button class="btn-end-session">End session</button>
       </div>
       <div class="phone-content">
+        <!-- Row 1: fully resolved -->
         <div class="feed-row">
-          <div>
-            <div class="feed-item-name">Whole Milk 2L</div>
-            <div class="feed-item-brand">Cravendale</div>
+          <div class="feed-row-top">
+            <span class="feed-item-name">Baked Beans</span>
+            <span class="feed-delta">+3</span>
           </div>
-          <div class="qty-controls">
-            <div class="qty-btn">−</div>
-            <span class="qty-count">+2</span>
-            <div class="qty-btn">+</div>
-          </div>
+          <div class="feed-item-meta">Heinz · 415g · 65p</div>
         </div>
+        <!-- Row 2: partially resolved (name + brand resolved, weight + price loading) -->
         <div class="feed-row">
-          <div>
-            <div class="feed-item-name">Greek Yogurt 500g</div>
-            <div class="feed-item-brand">Fage</div>
+          <div class="feed-row-top">
+            <span class="feed-item-name">Whole Milk 4 Pints</span>
+            <span class="feed-delta">+1</span>
           </div>
-          <div class="qty-controls">
-            <div class="qty-btn">−</div>
-            <span class="qty-count">+1</span>
-            <div class="qty-btn">+</div>
-          </div>
+          <div class="feed-item-meta">Sainsbury's · <span class="loading">loading…</span> · <span class="loading">loading…</span></div>
         </div>
+        <!-- Row 3: fully unresolved -->
         <div class="feed-row">
-          <div>
-            <div class="feed-item-name loading">loading…</div>
-            <div class="feed-item-brand loading">loading…</div>
+          <div class="feed-row-top">
+            <span class="feed-item-name loading">loading…</span>
+            <span class="feed-delta">+1</span>
           </div>
-          <div class="qty-controls">
-            <div class="qty-btn">−</div>
-            <span class="qty-count">+1</span>
-            <div class="qty-btn">+</div>
-          </div>
+          <div class="feed-item-meta"><span class="loading">loading…</span> · <span class="loading">loading…</span> · <span class="loading">loading…</span></div>
         </div>
       </div>
     </div>
 
     <p class="annotation">
-      <strong>D2 + D6 + D7:</strong> Thin banner always visible, showing session type and
-      running item count. Each row has inline ± controls showing the signed session delta.
-      Products not yet resolved by the worker show italic muted "loading…" in both fields.
+      <strong>D2 + D6 + D7:</strong> Banner shows total units in session (sum of deltas = 5,
+      not distinct products = 3 — "units" is used throughout to avoid ambiguity). Each row
+      shows name and delta on line 1; brand · weight · price on line 2. Fields resolve
+      independently: row 2 shows name and brand but weight and price are still pending;
+      row 3 is fully unresolved.
     </p>
   </div>
 
-  <!-- ============================== SCREEN 3 — End session strip ============================== -->
+  <!-- ============================== SCREEN 3 — End session strip (ready) ============================== -->
   <div class="screen-wrapper">
     <div class="screen-label">Screen 3<br>End session strip</div>
 
     <div class="phone-frame">
       <div class="phone-header">Inventory</div>
       <nav class="phone-nav">
-        <a href="#">Mode</a>
         <a href="#">Inventory</a>
         <a href="#">Low Stock</a>
         <a href="#" class="active">Feed</a>
+        <a href="#">Unresolved</a>
       </nav>
       <div class="phone-banner scan-in">
-        <span class="banner-label">Scan in — 3 items</span>
+        <span class="banner-label">Scan in — 5 units</span>
         <button class="btn-end-session">End session</button>
       </div>
       <div class="phone-content">
         <!-- Feed content (same as Screen 2) -->
         <div class="feed-row">
-          <div>
-            <div class="feed-item-name">Whole Milk 2L</div>
-            <div class="feed-item-brand">Cravendale</div>
+          <div class="feed-row-top">
+            <span class="feed-item-name">Baked Beans</span>
+            <span class="feed-delta">+3</span>
           </div>
-          <div class="qty-controls">
-            <div class="qty-btn">−</div>
-            <span class="qty-count">+2</span>
-            <div class="qty-btn">+</div>
-          </div>
+          <div class="feed-item-meta">Heinz · 415g · 65p</div>
         </div>
         <div class="feed-row">
-          <div>
-            <div class="feed-item-name">Greek Yogurt 500g</div>
-            <div class="feed-item-brand">Fage</div>
+          <div class="feed-row-top">
+            <span class="feed-item-name">Whole Milk 4 Pints</span>
+            <span class="feed-delta">+1</span>
           </div>
-          <div class="qty-controls">
-            <div class="qty-btn">−</div>
-            <span class="qty-count">+1</span>
-            <div class="qty-btn">+</div>
-          </div>
+          <div class="feed-item-meta">Sainsbury's · <span class="loading">loading…</span> · <span class="loading">loading…</span></div>
         </div>
         <div class="feed-row">
-          <div>
-            <div class="feed-item-name loading">loading…</div>
-            <div class="feed-item-brand loading">loading…</div>
+          <div class="feed-row-top">
+            <span class="feed-item-name loading">loading…</span>
+            <span class="feed-delta">+1</span>
           </div>
-          <div class="qty-controls">
-            <div class="qty-btn">−</div>
-            <span class="qty-count">+1</span>
-            <div class="qty-btn">+</div>
-          </div>
+          <div class="feed-item-meta"><span class="loading">loading…</span> · <span class="loading">loading…</span> · <span class="loading">loading…</span></div>
         </div>
 
         <!-- Dim overlay anchored to phone-content -->
@@ -526,7 +495,7 @@
 
         <!-- Bottom strip anchored to phone-content -->
         <div class="bottom-strip">
-          <p class="strip-summary">Confirm to apply 3 changes to inventory, or discard to cancel.</p>
+          <p class="strip-summary">Add 5 units to inventory?</p>
           <div class="strip-buttons">
             <button class="btn-confirm">Confirm</button>
             <button class="btn-discard-strip">Discard</button>
@@ -538,7 +507,8 @@
     <p class="annotation">
       <strong>D4:</strong> Tapping "End session" slides up an inline bottom strip — less
       disruptive than a full-screen modal for the common confirm path. The header, nav, and
-      banner remain readable. Feed content dims to signal pending action.
+      banner remain readable. Strip copy uses "Add … units" for scan-in; "Remove … units"
+      would be used for scan-out.
     </p>
   </div>
 
@@ -549,38 +519,30 @@
     <div class="phone-frame">
       <div class="phone-header">Inventory</div>
       <nav class="phone-nav">
-        <a href="#">Mode</a>
         <a href="#">Inventory</a>
         <a href="#">Low Stock</a>
         <a href="#" class="active">Feed</a>
+        <a href="#">Unresolved</a>
       </nav>
       <div class="phone-banner scan-in">
-        <span class="banner-label">Scan in — 3 items</span>
+        <span class="banner-label">Scan in — 5 units</span>
         <button class="btn-end-session">End session</button>
       </div>
       <div class="phone-content">
         <!-- Feed content (dimmed background) -->
         <div class="feed-row">
-          <div>
-            <div class="feed-item-name">Whole Milk 2L</div>
-            <div class="feed-item-brand">Cravendale</div>
+          <div class="feed-row-top">
+            <span class="feed-item-name">Baked Beans</span>
+            <span class="feed-delta">+3</span>
           </div>
-          <div class="qty-controls">
-            <div class="qty-btn">−</div>
-            <span class="qty-count">+2</span>
-            <div class="qty-btn">+</div>
-          </div>
+          <div class="feed-item-meta">Heinz · 415g · 65p</div>
         </div>
         <div class="feed-row">
-          <div>
-            <div class="feed-item-name">Greek Yogurt 500g</div>
-            <div class="feed-item-brand">Fage</div>
+          <div class="feed-row-top">
+            <span class="feed-item-name">Whole Milk 4 Pints</span>
+            <span class="feed-delta">+1</span>
           </div>
-          <div class="qty-controls">
-            <div class="qty-btn">−</div>
-            <span class="qty-count">+1</span>
-            <div class="qty-btn">+</div>
-          </div>
+          <div class="feed-item-meta">Sainsbury's · <span class="loading">loading…</span> · <span class="loading">loading…</span></div>
         </div>
 
         <!-- Modal overlay anchored to phone-content -->
@@ -601,6 +563,68 @@
       <strong>D5:</strong> The centred overlay modal signals irreversibility — visually
       distinct from the bottom strip. Destructive action ("Yes, discard") is on the left;
       the safe escape ("Keep session") is on the right.
+    </p>
+  </div>
+
+  <!-- ============================== SCREEN 5 — End session strip (lookups pending) ============================== -->
+  <div class="screen-wrapper">
+    <div class="screen-label">Screen 5<br>End session strip<br>(lookups pending)</div>
+
+    <div class="phone-frame">
+      <div class="phone-header">Inventory</div>
+      <nav class="phone-nav">
+        <a href="#">Inventory</a>
+        <a href="#">Low Stock</a>
+        <a href="#" class="active">Feed</a>
+        <a href="#">Unresolved</a>
+      </nav>
+      <div class="phone-banner scan-in">
+        <span class="banner-label">Scan in — 5 units</span>
+        <button class="btn-end-session">End session</button>
+      </div>
+      <div class="phone-content">
+        <!-- Feed content (same as Screen 3) -->
+        <div class="feed-row">
+          <div class="feed-row-top">
+            <span class="feed-item-name">Baked Beans</span>
+            <span class="feed-delta">+3</span>
+          </div>
+          <div class="feed-item-meta">Heinz · 415g · 65p</div>
+        </div>
+        <div class="feed-row">
+          <div class="feed-row-top">
+            <span class="feed-item-name">Whole Milk 4 Pints</span>
+            <span class="feed-delta">+1</span>
+          </div>
+          <div class="feed-item-meta">Sainsbury's · <span class="loading">loading…</span> · <span class="loading">loading…</span></div>
+        </div>
+        <div class="feed-row">
+          <div class="feed-row-top">
+            <span class="feed-item-name loading">loading…</span>
+            <span class="feed-delta">+1</span>
+          </div>
+          <div class="feed-item-meta"><span class="loading">loading…</span> · <span class="loading">loading…</span> · <span class="loading">loading…</span></div>
+        </div>
+
+        <!-- Dim overlay anchored to phone-content -->
+        <div class="dim-overlay"></div>
+
+        <!-- Bottom strip — Confirm disabled while lookups in progress -->
+        <div class="bottom-strip">
+          <p class="strip-summary">Add 5 units to inventory?</p>
+          <div class="strip-buttons">
+            <button class="btn-confirm btn-confirm-disabled">loading…</button>
+            <button class="btn-discard-strip">Discard</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="annotation">
+      <strong>D4 variant:</strong> If the user taps "End session" while product lookups are
+      still in progress, Confirm is greyed out and shows "loading…". Discard remains
+      available. Confirm becomes active once all rows are resolved. This prevents applying
+      incomplete data to inventory.
     </p>
   </div>
 
