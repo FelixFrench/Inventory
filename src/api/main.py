@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.dependencies import verify_api_key
-from src.api.routers import mode, scan, reports, ws
+from src.api.routers import mode, scan, reports
 from src.db.db import get_connection
 
 logger = logging.getLogger(__name__)
@@ -48,10 +48,6 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(scan.router,    dependencies=[Depends(verify_api_key)])
 app.include_router(mode.router,    dependencies=[Depends(verify_api_key)])
 app.include_router(reports.router, dependencies=[Depends(verify_api_key)])
-# No Depends(verify_api_key) — intentional. Browser WS API cannot send custom
-# headers; LAN-only deployment makes unauthenticated /ws acceptable for this spike.
-# SPIKE A — REMOVE BEFORE PHASE 2
-app.include_router(ws.router)
 
 # Must remain after all include_router() calls — FastAPI matches routes in
 # registration order and this catch-all would shadow any router added after it.
