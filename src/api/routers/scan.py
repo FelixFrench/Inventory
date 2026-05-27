@@ -4,71 +4,81 @@ from datetime import datetime, UTC
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.api.dependencies import get_db
+from src.api.dependencies import get_retailer_id
 from src.api.models import ScanRequest, ScanResponse
+from src.db.db import get_connection
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+_503 = HTTPException(
+    status_code=503,
+    detail="Service temporarily unavailable",
+    headers={"Retry-After": "1"},
+)
+
 
 @router.post("/scan", response_model=ScanResponse)
-def scan(body: ScanRequest, db: sqlite3.Connection = Depends(get_db)):
+def scan(body: ScanRequest, retailer_id: int = Depends(get_retailer_id)):
     try:
-        with db:
-            row = db.execute("SELECT value FROM config WHERE key = 'scan_mode'").fetchone()
-            if row is None:
-                logger.warning("scan_mode missing from config, defaulting to 'out'")
-                direction = "out"
-            else:
-                direction = row["value"]
-
-            retailer = db.execute(
-                "SELECT id FROM retailers WHERE name = ?", ("Sainsbury's",)
+        conn = get_connection()
+        try:
+            session_row = conn.execute(
+                "SELECT id, type FROM sessions LIMIT 1"
             ).fetchone()
-            if retailer is None:
-                raise HTTPException(status_code=500, detail="Sainsbury's retailer not configured")
-            retailer_id = retailer["id"]
+            if session_row is None:
+                raise HTTPException(status_code=409, detail={"error": "no_active_session"})
 
-            db.execute(
-                "INSERT INTO scan_events (barcode, retailer_id, direction, timestamp) VALUES (?, ?, ?, ?)",
-                (body.barcode, retailer_id, direction, datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")),
-            )
+            session_id = session_row['id']
+            now = datetime.now(UTC).isoformat()
 
-            barcode_row = db.execute(
-                "SELECT product_variant_id FROM barcodes "
-                "WHERE barcode = ? AND retailer_id = ? AND product_variant_id IS NOT NULL",
-                (body.barcode, retailer_id),
-            ).fetchone()
+            with conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)",
+                    (body.barcode,)
+                )
 
-            known = barcode_row is not None
-            if known:
-                pvid = barcode_row["product_variant_id"]
-                inv = db.execute(
-                    "SELECT quantity FROM inventory WHERE product_variant_id = ?", (pvid,)
+                check = conn.execute(
+                    """
+                    SELECT
+                        EXISTS(SELECT 1 FROM product_variants WHERE barcode = ? AND retailer_id = ?) AS has_info,
+                        EXISTS(SELECT 1 FROM prices WHERE barcode = ? AND retailer_id = ?) AS has_price
+                    """,
+                    (body.barcode, retailer_id, body.barcode, retailer_id)
                 ).fetchone()
-                qty = inv["quantity"] if inv else 0
-                if direction == "in":
-                    new_qty = qty + 1
+
+                has_info = bool(check['has_info'])
+                has_price = bool(check['has_price'])
+
+                if has_info and has_price:
+                    info_status = 'resolved'
+                    price_status = 'resolved'
+                elif has_info:
+                    info_status = 'resolved'
+                    price_status = 'pending'
                 else:
-                    if qty == 0:
-                        logger.warning("Scan out for %s but quantity already 0", body.barcode)
-                    new_qty = max(0, qty - 1)
-                db.execute(
-                    "INSERT INTO inventory (product_variant_id, quantity, minimum_quantity) VALUES (?, ?, 0) "
-                    "ON CONFLICT(product_variant_id) DO UPDATE SET quantity = excluded.quantity",
-                    (pvid, new_qty),
-                )
-            else:
-                db.execute(
-                    "INSERT OR IGNORE INTO barcodes (barcode, retailer_id) VALUES (?, ?)",
-                    (body.barcode, retailer_id),
-                )
-                db.execute(
-                    "INSERT OR IGNORE INTO pending_lookups (barcode, retailer_id, status) VALUES (?, ?, 'pending')",
-                    (body.barcode, retailer_id),
+                    info_status = 'pending'
+                    price_status = 'pending'
+
+                conn.execute(
+                    """
+                    INSERT INTO session_items
+                        (session_id, barcode, delta, first_scanned_at, info_status, price_status)
+                    VALUES (?, ?, 1, ?, ?, ?)
+                    ON CONFLICT(session_id, barcode) DO UPDATE SET delta = delta + 1
+                    """,
+                    (session_id, body.barcode, now, info_status, price_status)
                 )
 
-        return ScanResponse(status="ok", direction=direction, known=known)
-    except sqlite3.Error as e:
-        logger.error("DB error during scan: %s", e)
-        raise HTTPException(status_code=500, detail="Internal server error")
+                delta = conn.execute(
+                    "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ?",
+                    (session_id, body.barcode)
+                ).fetchone()['delta']
+
+            return ScanResponse(barcode=body.barcode, session_delta=delta)
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except sqlite3.OperationalError:
+        raise _503

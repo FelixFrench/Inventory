@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -8,14 +8,46 @@ class ScanRequest(BaseModel):
 
 
 class ScanResponse(BaseModel):
-    status: str
-    direction: str
-    known: bool
+    barcode: str
+    session_delta: int
 
 
-class ModeRequest(BaseModel):
-    mode: Literal["in", "out"]
+class StartSessionRequest(BaseModel):
+    type: Literal["in", "out"]
 
 
-class ModeResponse(BaseModel):
-    mode: str
+class FieldStatus(BaseModel):
+    value: Optional[Any]
+    status: Literal["resolved", "loading", "failed"]
+
+
+class SessionItem(BaseModel):
+    barcode: str
+    delta: int
+    first_scanned_at: str
+    name: FieldStatus
+    brand: FieldStatus
+    weight: FieldStatus
+    price: FieldStatus
+
+
+class SessionObject(BaseModel):
+    id: int
+    type: str
+    started_at: str
+    recovered_at: Optional[str]
+    total_delta: int
+    items: list[SessionItem]
+
+
+class SessionResponse(BaseModel):
+    session: Optional[SessionObject]
+
+
+class ConfirmResponse(BaseModel):
+    applied_items: int
+    session_id: int
+
+
+class DiscardResponse(BaseModel):
+    discarded_session_id: int
