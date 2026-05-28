@@ -1,11 +1,14 @@
-def get_inventory_report(db) -> dict:
-    rows = db.execute("""
+def get_inventory_report(db, retailer_id: int) -> dict:
+    rows = db.execute(
+        """
         SELECT pv.name, pv.brand, i.quantity, p.price_pence
         FROM inventory i
-        JOIN product_variants pv ON pv.id = i.product_variant_id
-        LEFT JOIN prices p ON p.product_variant_id = pv.id
+        JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = ?
+        LEFT JOIN prices p ON p.barcode = i.barcode AND p.retailer_id = ?
         ORDER BY (i.quantity = 0), LOWER(pv.name)
-    """).fetchall()
+        """,
+        (retailer_id, retailer_id)
+    ).fetchall()
 
     items = []
     total = 0
@@ -23,15 +26,18 @@ def get_inventory_report(db) -> dict:
     return {"items": items, "total_value_pence": total}
 
 
-def get_low_stock_report(db) -> dict:
-    rows = db.execute("""
+def get_low_stock_report(db, retailer_id: int) -> dict:
+    rows = db.execute(
+        """
         SELECT pv.name, pv.brand, i.quantity, i.minimum_quantity,
                (i.minimum_quantity - i.quantity) AS shortfall
         FROM inventory i
-        JOIN product_variants pv ON pv.id = i.product_variant_id
+        JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = ?
         WHERE i.quantity < i.minimum_quantity
         ORDER BY shortfall DESC, LOWER(pv.name)
-    """).fetchall()
+        """,
+        (retailer_id,)
+    ).fetchall()
 
     items = [dict(r) for r in rows]
     return {"items": items}

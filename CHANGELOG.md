@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Scanning session model: POST /session, GET /session, POST /session/confirm, POST /session/discard
+- Session-scoped lookup state (info_status, price_status) on session_items replaces pending_lookups
+- worker_state singleton table for OFF rate-limit anchor, persists across session deletes and reboots
+- PRAGMA busy_timeout = 250 on all connections (~5× the worst-case confirm transaction)
+- PRAGMA synchronous = NORMAL on all connections (standard SQLite-with-WAL recommendation)
+- Crash recovery: active session resumed on FastAPI restart; recovered_at timestamp set for Phase 2 UI toast
+
+### Changed
+- POST /scan now writes to session_items instead of inventory directly; returns 409 if no session active
+- Worker poll source changed from pending_lookups to session_items (two poll queries: info-pending, price-pending)
+- Worker write-back split into four explicit transactions (OFF success/failure, Sainsbury's success/failure); all assert rowcount
+
+### Removed
+- GET /mode and POST /mode endpoints (deliberate breaking change at minor-version bump)
+- pending_lookups table (replaced by session-scoped state on session_items)
+
 ## [1.0.0] - 2025-05-18
 
 ### Added

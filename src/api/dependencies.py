@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from src.db.db import get_connection
 
@@ -26,3 +26,7 @@ def verify_api_key(x_api_key: str = Header(None)):
         raise RuntimeError("INVENTORY_API_KEY not set in environment or config.local.env")
     if x_api_key != _API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def get_retailer_id(request: Request) -> int:
+    return request.app.state.sainsburys_retailer_id

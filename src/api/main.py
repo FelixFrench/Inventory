@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 from alembic import command
@@ -9,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.dependencies import verify_api_key
-from src.api.routers import mode, scan, reports
+from src.api.routers import scan, reports, session
 from src.db.db import get_connection
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,24 @@ async def lifespan(app: FastAPI):
         logger.info("journal_mode: %s", row[0])
     finally:
         conn.close()
+
+    with get_connection() as conn:
+        row = conn.execute("SELECT id FROM sessions LIMIT 1").fetchone()
+        if row:
+            conn.execute(
+                "UPDATE sessions SET recovered_at = ? WHERE id = ?",
+                (datetime.utcnow().isoformat(), row['id'])
+            )
+            logger.info(f"Session {row['id']} recovered after restart")
+
+    with get_connection() as conn:
+        retailer = conn.execute(
+            "SELECT id FROM retailers WHERE name = 'Sainsbury''s'"
+        ).fetchone()
+        if retailer is None:
+            raise RuntimeError("Sainsbury's retailer not configured")
+        app.state.sainsburys_retailer_id = retailer['id']
+
     logger.info("Inventory FastAPI started")
     yield
 
@@ -46,7 +65,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(scan.router,    dependencies=[Depends(verify_api_key)])
-app.include_router(mode.router,    dependencies=[Depends(verify_api_key)])
+app.include_router(session.router, dependencies=[Depends(verify_api_key)])
 app.include_router(reports.router, dependencies=[Depends(verify_api_key)])
 
 # Must remain after all include_router() calls — FastAPI matches routes in
