@@ -1,11 +1,13 @@
+import asyncio
+import json
 import logging
 import sqlite3
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
-from src.api.dependencies import get_retailer_id
 from src.api.models import ScanRequest, ScanResponse
+from src.api.routers.ws import build_payload, manager
 from src.db.db import get_connection
 
 logger = logging.getLogger(__name__)
@@ -18,8 +20,8 @@ _503 = HTTPException(
 )
 
 
-@router.post("/scan", response_model=ScanResponse)
-def scan(body: ScanRequest, retailer_id: int = Depends(get_retailer_id)):
+def _do_scan(barcode: str, retailer_id: int) -> dict:
+    """Run the full scan DB transaction. Returns scan result dict or raises HTTPException."""
     try:
         conn = get_connection()
         try:
@@ -29,36 +31,43 @@ def scan(body: ScanRequest, retailer_id: int = Depends(get_retailer_id)):
             if session_row is None:
                 raise HTTPException(status_code=409, detail={"error": "no_active_session"})
 
-            session_id = session_row['id']
+            session_id = session_row["id"]
             now = datetime.now(UTC).isoformat()
 
             with conn:
                 conn.execute(
                     "INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)",
-                    (body.barcode,)
+                    (barcode,),
                 )
 
                 check = conn.execute(
                     """
                     SELECT
-                        EXISTS(SELECT 1 FROM product_variants WHERE barcode = ? AND retailer_id = ?) AS has_info,
-                        EXISTS(SELECT 1 FROM prices WHERE barcode = ? AND retailer_id = ?) AS has_price
+                        pv.name, pv.brand, pv.weight_g, pr.price_pence,
+                        (pv.barcode IS NOT NULL) AS has_info,
+                        (pr.barcode IS NOT NULL) AS has_price
+                    FROM barcodes b
+                    LEFT JOIN product_variants pv
+                           ON pv.barcode = b.barcode AND pv.retailer_id = ?
+                    LEFT JOIN prices pr
+                           ON pr.barcode = b.barcode AND pr.retailer_id = ?
+                    WHERE b.barcode = ?
                     """,
-                    (body.barcode, retailer_id, body.barcode, retailer_id)
+                    (retailer_id, retailer_id, barcode),
                 ).fetchone()
 
-                has_info = bool(check['has_info'])
-                has_price = bool(check['has_price'])
+                has_info = bool(check["has_info"])
+                has_price = bool(check["has_price"])
 
                 if has_info and has_price:
-                    info_status = 'resolved'
-                    price_status = 'resolved'
+                    info_status = "resolved"
+                    price_status = "resolved"
                 elif has_info:
-                    info_status = 'resolved'
-                    price_status = 'pending'
+                    info_status = "resolved"
+                    price_status = "pending"
                 else:
-                    info_status = 'pending'
-                    price_status = 'pending'
+                    info_status = "pending"
+                    price_status = "pending"
 
                 conn.execute(
                     """
@@ -67,18 +76,35 @@ def scan(body: ScanRequest, retailer_id: int = Depends(get_retailer_id)):
                     VALUES (?, ?, 1, ?, ?, ?)
                     ON CONFLICT(session_id, barcode) DO UPDATE SET delta = delta + 1
                     """,
-                    (session_id, body.barcode, now, info_status, price_status)
+                    (session_id, barcode, now, info_status, price_status),
                 )
 
                 delta = conn.execute(
                     "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ?",
-                    (session_id, body.barcode)
-                ).fetchone()['delta']
+                    (session_id, barcode),
+                ).fetchone()["delta"]
 
-            return ScanResponse(barcode=body.barcode, session_delta=delta)
+            return {
+                "barcode": barcode,
+                "session_delta": delta,
+                "info_status": info_status,
+                "price_status": price_status,
+                "name": check["name"],
+                "brand": check["brand"],
+                "weight_g": check["weight_g"],
+                "price_pence": check["price_pence"],
+            }
         finally:
             conn.close()
     except HTTPException:
         raise
     except sqlite3.OperationalError:
         raise _503
+
+
+@router.post("/scan", response_model=ScanResponse)
+async def scan(body: ScanRequest, request: Request):
+    retailer_id = request.app.state.sainsburys_retailer_id
+    result = await asyncio.to_thread(_do_scan, body.barcode, retailer_id)
+    await manager.broadcast(json.dumps(build_payload("scan", result)))
+    return ScanResponse(barcode=result["barcode"], session_delta=result["session_delta"])

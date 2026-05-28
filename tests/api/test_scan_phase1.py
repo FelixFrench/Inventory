@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 from starlette.testclient import TestClient
 
-from src.api.dependencies import get_db, get_retailer_id, verify_api_key
+from src.api.dependencies import get_db, verify_api_key
 from src.api.main import app
 
 SCHEMA = """
@@ -73,7 +73,7 @@ def client(db):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[get_retailer_id] = lambda: _RETAILER_ID
+    app.state.sainsburys_retailer_id = _RETAILER_ID
     with patch("src.api.routers.scan.get_connection", lambda: _NocloseConn(db)):
         yield TestClient(app)
     app.dependency_overrides.clear()
