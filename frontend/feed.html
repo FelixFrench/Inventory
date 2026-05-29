@@ -45,16 +45,19 @@
     .italic-muted { color: #aaa; font-style: italic; }
 
     /* Dim overlay (inside main, covers content only) */
-    #dim-overlay { display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.35); z-index: 1; pointer-events: none; }
+    #dim-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.35); z-index: 1; pointer-events: none; display: none; }
+    #dim-overlay.visible { display: block; }
 
     /* End-session strip (fixed bottom) */
-    #end-strip { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #ddd; padding: 16px 20px; z-index: 20; }
+    #end-strip { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #ddd; padding: 16px 20px; z-index: 20; display: none; }
+    #end-strip.visible { display: block; }
     .strip-summary { font-size: 0.9rem; color: #333; margin-bottom: 12px; }
     .strip-buttons { display: flex; gap: 10px; }
     #btn-confirm { flex: 2; background: #3B6D11; color: #fff; border: none; border-radius: 8px; padding: 12px; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
     #btn-confirm:disabled { background: #ccc; color: #888; cursor: not-allowed; }
     #btn-discard { flex: 1; background: #f0f0f0; color: #333; border: 1px solid #ccc; border-radius: 8px; padding: 12px; font-size: 0.9rem; cursor: pointer; }
-    #strip-error { color: #c0392b; font-size: 0.85rem; margin-top: 8px; }
+    #strip-error { display: none; color: #c0392b; font-size: 0.85rem; margin-top: 8px; }
+    #strip-error.visible { display: block; }
 
     /* Discard modal */
     #discard-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 30; align-items: center; justify-content: center; }
@@ -112,7 +115,7 @@
       <button id="btn-confirm">Confirm</button>
       <button id="btn-discard">Discard</button>
     </div>
-    <p id="strip-error" style="display:none"></p>
+    <p id="strip-error"></p>
   </div>
 
   <div id="discard-modal">

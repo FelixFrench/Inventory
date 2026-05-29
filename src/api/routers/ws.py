@@ -16,6 +16,8 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: str):
+        if not self.active_connections:
+            return
         dead = []
         for connection in self.active_connections:
             try:
@@ -39,12 +41,10 @@ async def ws_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
+_STATUS_MAP = {"pending": "loading", "resolved": "resolved"}
+
 def _status_to_wire(db_status: str) -> str:
-    if db_status == "pending":
-        return "loading"
-    if db_status == "resolved":
-        return "resolved"
-    return "failed"  # 'failed' and 'not_possible'
+    return _STATUS_MAP.get(db_status, "failed")  # 'failed' and 'not_possible' → 'failed'
 
 
 def _format_weight(weight_g) -> str | None:

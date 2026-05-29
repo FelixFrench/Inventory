@@ -9,7 +9,6 @@ const RECONNECT_DELAY = 2000;
 
 function connectWS() {
     ws = new WebSocket(`ws://${window.location.host}/ws`);
-    ws.onopen = () => {};
     ws.onmessage = (event) => {
         handleWSMessage(JSON.parse(event.data));
     };
@@ -25,18 +24,19 @@ function esc(s) {
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function renderField(field) {
+// Returns the shared loading/failed markup, or null if the field has a value to display.
+function _statusMarkup(field) {
     if (field.status === 'loading') return '<span class="italic-muted">loading…</span>';
     if (field.status === 'failed')  return '<span class="muted">failed</span>';
-    if (field.value === null)       return '<span class="muted">unknown</span>';
-    return esc(String(field.value));
+    return null;
+}
+
+function renderField(field) {
+    return _statusMarkup(field) ?? (field.value === null ? '<span class="muted">unknown</span>' : esc(String(field.value)));
 }
 
 function renderPrice(field) {
-    if (field.status === 'loading') return '<span class="italic-muted">loading…</span>';
-    if (field.status === 'failed')  return '<span class="muted">failed</span>';
-    if (field.value === null)       return '<span class="muted">unknown</span>';
-    return '£' + field.value.toFixed(2);
+    return _statusMarkup(field) ?? (field.value === null ? '<span class="muted">unknown</span>' : '£' + field.value.toFixed(2));
 }
 
 // ── Banner ──────────────────────────────────────────────────────────────────
@@ -46,21 +46,22 @@ function totalDelta() {
 }
 
 function updateBanner() {
-    const banner  = document.getElementById('banner');
-    const text    = document.getElementById('banner-text');
-    const endBtn  = document.getElementById('btn-end-session');
-    const total   = totalDelta();
+    const banner = document.getElementById('banner');
+    const text   = document.getElementById('banner-text');
+    const endBtn = document.getElementById('btn-end-session');
+    const total  = totalDelta();
+
+    banner.classList.toggle('banner-idle', sessionType === null);
+    banner.classList.toggle('banner-in',   sessionType === 'in');
+    banner.classList.toggle('banner-out',  sessionType === 'out');
 
     if (sessionType === null) {
-        banner.className = 'banner-idle';
         text.textContent = 'No active session';
         endBtn.style.display = 'none';
     } else if (sessionType === 'in') {
-        banner.className = 'banner-in';
         text.textContent = `Scan in — ${total} units`;
         endBtn.style.display = '';
     } else {
-        banner.className = 'banner-out';
         text.textContent = `Scan out — ${total} units`;
         endBtn.style.display = '';
     }
@@ -93,45 +94,36 @@ function updateRowDOM(barcode) {
     if (el) el.innerHTML = makeRowHTML(barcode);
 }
 
-function prependRowToFeed(barcode) {
+function addRowToFeed(barcode, prepend = false) {
     const list = document.getElementById('feed-list');
     const li = document.createElement('li');
     li.id = 'row-' + barcode;
     li.className = 'feed-row';
     li.innerHTML = makeRowHTML(barcode);
-    list.prepend(li);
-}
-
-function appendRowToFeed(barcode) {
-    const list = document.getElementById('feed-list');
-    const li = document.createElement('li');
-    li.id = 'row-' + barcode;
-    li.className = 'feed-row';
-    li.innerHTML = makeRowHTML(barcode);
-    list.append(li);
+    prepend ? list.prepend(li) : list.append(li);
 }
 
 // ── WebSocket message handler ────────────────────────────────────────────────
 
+function _storeRow(barcode, msg) {
+    rows[barcode] = {
+        session_delta: msg.session_delta,
+        name: msg.name, brand: msg.brand,
+        weight: msg.weight, price: msg.price,
+    };
+}
+
 function handleWSMessage(msg) {
     if (msg.type === 'scan') {
-        rows[msg.barcode] = {
-            session_delta: msg.session_delta,
-            name: msg.name, brand: msg.brand,
-            weight: msg.weight, price: msg.price,
-        };
+        _storeRow(msg.barcode, msg);
         if (document.getElementById('row-' + msg.barcode)) {
             updateRowDOM(msg.barcode);
         } else {
-            prependRowToFeed(msg.barcode);
+            addRowToFeed(msg.barcode, true);
         }
     } else if (msg.type === 'resolution') {
         if (rows[msg.barcode] !== undefined) {
-            rows[msg.barcode] = {
-                session_delta: msg.session_delta,
-                name: msg.name, brand: msg.brand,
-                weight: msg.weight, price: msg.price,
-            };
+            _storeRow(msg.barcode, msg);
             updateRowDOM(msg.barcode);
         }
     }
@@ -162,17 +154,17 @@ function updateStripSummary() {
 
 function showEndStrip() {
     endStripOpen = true;
-    document.getElementById('end-strip').style.display = 'block';
-    document.getElementById('dim-overlay').style.display = 'block';
-    document.getElementById('strip-error').style.display = 'none';
+    document.getElementById('end-strip').classList.add('visible');
+    document.getElementById('dim-overlay').classList.add('visible');
+    document.getElementById('strip-error').classList.remove('visible');
     updateStripSummary();
     evaluateConfirmGate();
 }
 
 function hideEndStrip() {
     endStripOpen = false;
-    document.getElementById('end-strip').style.display = 'none';
-    document.getElementById('dim-overlay').style.display = 'none';
+    document.getElementById('end-strip').classList.remove('visible');
+    document.getElementById('dim-overlay').classList.remove('visible');
 }
 
 // ── Discard modal ────────────────────────────────────────────────────────────
@@ -211,7 +203,7 @@ function renderActiveSession(session) {
             name: item.name, brand: item.brand,
             weight: item.weight, price: item.price,
         };
-        appendRowToFeed(item.barcode);
+        addRowToFeed(item.barcode);
     }
     updateBanner();
 }
@@ -235,7 +227,7 @@ async function startSession(type) {
 async function confirmSession() {
     const btn = document.getElementById('btn-confirm');
     btn.disabled = true;
-    document.getElementById('strip-error').style.display = 'none';
+    document.getElementById('strip-error').classList.remove('visible');
     try {
         const resp = await fetch('/session/confirm', {
             method: 'POST',
@@ -249,7 +241,7 @@ async function confirmSession() {
             if (err === 'lookups_pending') {
                 const errEl = document.getElementById('strip-error');
                 errEl.textContent = 'Some lookups are still pending. Please wait.';
-                errEl.style.display = '';
+                errEl.classList.add('visible');
                 evaluateConfirmGate();
             } else if (err === 'would_go_negative') {
                 hideEndStrip();
