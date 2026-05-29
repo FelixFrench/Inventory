@@ -162,8 +162,8 @@ function updateStripSummary() {
 
 function showEndStrip() {
     endStripOpen = true;
-    document.getElementById('end-strip').style.display = '';
-    document.getElementById('dim-overlay').style.display = '';
+    document.getElementById('end-strip').style.display = 'block';
+    document.getElementById('dim-overlay').style.display = 'block';
     document.getElementById('strip-error').style.display = 'none';
     updateStripSummary();
     evaluateConfirmGate();
