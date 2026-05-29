@@ -31,8 +31,8 @@ function render(data) {
             <tbody>${rows}</tbody>
           </table>`;
   }
-  document.getElementById('loading').style.display = 'none';
-  el.style.display = '';
+  document.getElementById('loading').classList.add('hidden');
+  el.classList.remove('hidden');
 }
 
 (async function init() {
@@ -41,9 +41,9 @@ function render(data) {
     if (!resp.ok) throw new Error('Server error ' + resp.status);
     render(await resp.json());
   } catch (e) {
-    document.getElementById('loading').style.display = 'none';
+    document.getElementById('loading').classList.add('hidden');
     const err = document.getElementById('error-msg');
     err.textContent = 'Could not load low stock report. Check connection.';
-    err.style.display = '';
+    err.classList.remove('hidden');
   }
 })();

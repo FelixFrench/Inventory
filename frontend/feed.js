@@ -57,13 +57,13 @@ function updateBanner() {
 
     if (sessionType === null) {
         text.textContent = 'No active session';
-        endBtn.style.display = 'none';
+        endBtn.classList.add('hidden');
     } else if (sessionType === 'in') {
         text.textContent = `Scan in — ${total} units`;
-        endBtn.style.display = '';
+        endBtn.classList.remove('hidden');
     } else {
         text.textContent = `Scan out — ${total} units`;
-        endBtn.style.display = '';
+        endBtn.classList.remove('hidden');
     }
 }
 
@@ -183,8 +183,8 @@ function resetToNoSession() {
     sessionType = null;
     rows = {};
     document.getElementById('feed-list').innerHTML = '';
-    document.getElementById('no-session').style.display = '';
-    document.getElementById('active-session').style.display = 'none';
+    document.getElementById('no-session').classList.remove('hidden');
+    document.getElementById('active-session').classList.add('hidden');
     hideEndStrip();
     hideDiscardModal();
     document.getElementById('negative-modal').classList.remove('visible');
@@ -194,8 +194,8 @@ function resetToNoSession() {
 function renderActiveSession(session) {
     sessionType = session.type;
     rows = {};
-    document.getElementById('no-session').style.display = 'none';
-    document.getElementById('active-session').style.display = '';
+    document.getElementById('no-session').classList.add('hidden');
+    document.getElementById('active-session').classList.remove('hidden');
     document.getElementById('feed-list').innerHTML = '';
     for (const item of session.items) {
         rows[item.barcode] = {
