@@ -239,8 +239,9 @@ function evaluateConfirmGate() {
 function updateStripSummary() {
     const total  = totalDelta();
     const action = sessionType === 'in' ? 'Add' : 'Remove';
+    const prep   = sessionType === 'in' ? 'to'  : 'from';
     document.getElementById('strip-summary').textContent =
-        `Confirm: ${action} ${total} units to inventory?`;
+        `Confirm: ${action} ${total} units ${prep} inventory?`;
 }
 
 function showEndStrip() {
@@ -361,7 +362,7 @@ async function discardSession() {
 
 function showNegativeModal() {
     document.getElementById('negative-items').textContent =
-        'One or more items are highlighted above. Adjust quantities and try again.';
+        'One or more items are highlighted. Adjust quantities and try again.';
     document.getElementById('negative-modal').classList.add('visible');
 }
 
