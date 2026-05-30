@@ -24,6 +24,7 @@ class FieldStatus(BaseModel):
 class SessionItem(BaseModel):
     barcode: str
     delta: int
+    inventory_quantity: int
     first_scanned_at: str
     name: FieldStatus
     brand: FieldStatus

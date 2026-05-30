@@ -79,7 +79,10 @@ function makeRowHTML(barcode) {
     return `
       <div class="feed-row-top">
         <span class="feed-item-name">${renderField(r.name)}</span>
-        <span class="${deltaClass}">${deltaSign}${r.session_delta}</span>
+        <div class="feed-row-right">
+          <span class="${deltaClass}">${deltaSign}${r.session_delta}</span>
+          <span class="feed-item-stock">${r.inventory_quantity ?? 0} in stock</span>
+        </div>
       </div>
       <div class="feed-item-meta">${meta}</div>
       <div class="feed-item-qty">
@@ -91,7 +94,11 @@ function makeRowHTML(barcode) {
 
 function updateRowDOM(barcode) {
     const el = document.getElementById('row-' + barcode);
-    if (el) el.innerHTML = makeRowHTML(barcode);
+    if (!el) return;
+    el.innerHTML = makeRowHTML(barcode);
+    const overStock = sessionType === 'out' &&
+                      rows[barcode].session_delta > rows[barcode].inventory_quantity;
+    el.classList.toggle('feed-row--warning', overStock);
 }
 
 function addRowToFeed(barcode, prepend = false) {
@@ -100,6 +107,9 @@ function addRowToFeed(barcode, prepend = false) {
     li.id = 'row-' + barcode;
     li.className = 'feed-row';
     li.innerHTML = makeRowHTML(barcode);
+    const overStock = sessionType === 'out' &&
+                      rows[barcode].session_delta > rows[barcode].inventory_quantity;
+    if (overStock) li.classList.add('feed-row--warning');
     prepend ? list.prepend(li) : list.append(li);
 }
 
@@ -189,6 +199,7 @@ function _storeRow(barcode, msg) {
 function handleWSMessage(msg) {
     if (msg.type === 'scan') {
         _storeRow(msg.barcode, msg);
+        rows[msg.barcode].inventory_quantity = msg.inventory_quantity ?? 0;
         if (document.getElementById('row-' + msg.barcode)) {
             updateRowDOM(msg.barcode);
         } else {
@@ -196,7 +207,9 @@ function handleWSMessage(msg) {
         }
     } else if (msg.type === 'resolution') {
         if (rows[msg.barcode] !== undefined) {
+            const savedQty = rows[msg.barcode].inventory_quantity ?? 0;
             _storeRow(msg.barcode, msg);
+            rows[msg.barcode].inventory_quantity = savedQty;
             updateRowDOM(msg.barcode);
         }
     } else if (msg.type === 'delta_update') {
@@ -278,6 +291,7 @@ function renderActiveSession(session) {
     for (const item of session.items) {
         rows[item.barcode] = {
             session_delta: item.delta, // GET /session uses 'delta'; WS uses 'session_delta'
+            inventory_quantity: item.inventory_quantity ?? 0,
             name: item.name, brand: item.brand,
             weight: item.weight, price: item.price,
         };
@@ -323,7 +337,7 @@ async function confirmSession() {
                 evaluateConfirmGate();
             } else if (err === 'would_go_negative') {
                 hideEndStrip();
-                showNegativeModal(data.detail?.items ?? []);
+                showNegativeModal();
             }
         }
     } catch (_) {
@@ -345,15 +359,9 @@ async function discardSession() {
     }
 }
 
-function showNegativeModal(items) {
-    const el = document.getElementById('negative-items');
-    if (!items.length) {
-        el.textContent = 'Some items would go negative. Adjust quantities before confirming.';
-    } else {
-        el.innerHTML = items.map(item =>
-            `<div class="negative-item">${esc(item.barcode)}: stock ${item.current_quantity}, removing ${item.delta}</div>`
-        ).join('');
-    }
+function showNegativeModal() {
+    document.getElementById('negative-items').textContent =
+        'One or more items are highlighted above. Adjust quantities and try again.';
     document.getElementById('negative-modal').classList.add('visible');
 }
 

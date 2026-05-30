@@ -42,10 +42,12 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
                pv.name,
                pv.brand,
                pv.weight_g,
-               pr.price_pence
+               pr.price_pence,
+               COALESCE(inv.quantity, 0) AS inventory_quantity
         FROM   session_items si
         LEFT   JOIN product_variants pv ON pv.barcode = si.barcode AND pv.retailer_id = ?
         LEFT   JOIN prices pr            ON pr.barcode = si.barcode AND pr.retailer_id = ?
+        LEFT   JOIN inventory inv        ON inv.barcode = si.barcode
         WHERE  si.session_id = ?
         ORDER  BY si.first_scanned_at ASC
         """,
@@ -65,6 +67,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
         items.append({
             "barcode": r['barcode'],
             "delta": r['delta'],
+            "inventory_quantity": r['inventory_quantity'],
             "first_scanned_at": r['first_scanned_at'],
             "name": {"value": r['name'], "status": info_s},
             "brand": {"value": r['brand'], "status": info_s},

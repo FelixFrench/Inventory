@@ -523,3 +523,33 @@ def test_put_delta_no_broadcast_item_not_found(client, db):
 
     assert resp.status_code == 404
     mock_mgr.broadcast.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3b Tests: inventory_quantity in GET /session
+# ---------------------------------------------------------------------------
+
+def test_get_session_item_includes_inventory_quantity(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved")
+    db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
+    db.execute("INSERT INTO inventory (barcode, quantity) VALUES (?, 4)", (_BARCODE,))
+    db.commit()
+
+    resp = client.get("/session")
+    assert resp.status_code == 200
+    item = resp.json()["session"]["items"][0]
+    assert item["inventory_quantity"] == 4
+
+
+def test_get_session_item_inventory_quantity_defaults_to_zero(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved")
+    # No inventory row seeded
+
+    resp = client.get("/session")
+    assert resp.status_code == 200
+    item = resp.json()["session"]["items"][0]
+    assert item["inventory_quantity"] == 0
