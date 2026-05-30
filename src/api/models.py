@@ -24,6 +24,7 @@ class FieldStatus(BaseModel):
 class SessionItem(BaseModel):
     barcode: str
     delta: int
+    inventory_quantity: int
     first_scanned_at: str
     name: FieldStatus
     brand: FieldStatus
@@ -51,3 +52,7 @@ class ConfirmResponse(BaseModel):
 
 class DiscardResponse(BaseModel):
     discarded_session_id: int
+
+
+class DeltaUpdateRequest(BaseModel):
+    delta: int

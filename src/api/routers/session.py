@@ -1,3 +1,5 @@
+import asyncio
+import json
 import sqlite3
 from datetime import datetime
 
@@ -6,11 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from src.api.dependencies import get_retailer_id
 from src.api.models import (
     ConfirmResponse,
+    DeltaUpdateRequest,
     DiscardResponse,
     SessionObject,
     SessionResponse,
     StartSessionRequest,
 )
+from src.api.routers.ws import manager
 from src.db.db import get_connection
 
 router = APIRouter()
@@ -38,10 +42,12 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
                pv.name,
                pv.brand,
                pv.weight_g,
-               pr.price_pence
+               pr.price_pence,
+               COALESCE(inv.quantity, 0) AS inventory_quantity
         FROM   session_items si
         LEFT   JOIN product_variants pv ON pv.barcode = si.barcode AND pv.retailer_id = ?
         LEFT   JOIN prices pr            ON pr.barcode = si.barcode AND pr.retailer_id = ?
+        LEFT   JOIN inventory inv        ON inv.barcode = si.barcode
         WHERE  si.session_id = ?
         ORDER  BY si.first_scanned_at ASC
         """,
@@ -61,6 +67,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
         items.append({
             "barcode": r['barcode'],
             "delta": r['delta'],
+            "inventory_quantity": r['inventory_quantity'],
             "first_scanned_at": r['first_scanned_at'],
             "name": {"value": r['name'], "status": info_s},
             "brand": {"value": r['brand'], "status": info_s},
@@ -260,3 +267,50 @@ def discard_session():
         raise
     except sqlite3.OperationalError:
         raise _503
+
+
+def _do_put_delta(barcode: str, new_delta: int) -> dict | None:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT id FROM sessions LIMIT 1").fetchone()
+        if row is None:
+            return None
+        session_id = row["id"]
+        cur = conn.execute(
+            "UPDATE session_items SET delta = ? WHERE session_id = ? AND barcode = ?",
+            (new_delta, session_id, barcode),
+        )
+        if cur.rowcount == 0:
+            raise ValueError("item_not_found")
+        total = conn.execute(
+            "SELECT COALESCE(SUM(delta), 0) AS total FROM session_items WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()["total"]
+        conn.commit()
+        return {"barcode": barcode, "delta": new_delta, "session_total_delta": total}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@router.put("/session/items/{barcode}")
+async def put_session_item_delta(barcode: str, body: DeltaUpdateRequest):
+    if body.delta < 0:
+        raise HTTPException(status_code=400, detail={"error": "invalid_delta"})
+    try:
+        result = await asyncio.to_thread(_do_put_delta, barcode, body.delta)
+    except ValueError as e:
+        if str(e) == "item_not_found":
+            raise HTTPException(status_code=404, detail={"error": "item_not_found"})
+        raise
+    if result is None:
+        raise HTTPException(status_code=409, detail={"error": "no_active_session"})
+    await manager.broadcast(json.dumps({
+        "type": "delta_update",
+        "barcode": result["barcode"],
+        "session_delta": result["delta"],
+        "session_total_delta": result["session_total_delta"],
+    }))
+    return result

@@ -45,12 +45,15 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
                     SELECT
                         pv.name, pv.brand, pv.weight_g, pr.price_pence,
                         (pv.barcode IS NOT NULL) AS has_info,
-                        (pr.barcode IS NOT NULL) AS has_price
+                        (pr.barcode IS NOT NULL) AS has_price,
+                        COALESCE(inv.quantity, 0) AS inventory_quantity
                     FROM barcodes b
                     LEFT JOIN product_variants pv
                            ON pv.barcode = b.barcode AND pv.retailer_id = ?
                     LEFT JOIN prices pr
                            ON pr.barcode = b.barcode AND pr.retailer_id = ?
+                    LEFT JOIN inventory inv
+                           ON inv.barcode = b.barcode
                     WHERE b.barcode = ?
                     """,
                     (retailer_id, retailer_id, barcode),
@@ -93,6 +96,7 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
                 "brand": check["brand"],
                 "weight_g": check["weight_g"],
                 "price_pence": check["price_pence"],
+                "inventory_quantity": check["inventory_quantity"],
             }
         finally:
             conn.close()
@@ -106,5 +110,7 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
 async def scan(body: ScanRequest, request: Request):
     retailer_id = request.app.state.sainsburys_retailer_id
     result = await asyncio.to_thread(_do_scan, body.barcode, retailer_id)
-    await manager.broadcast(json.dumps(build_payload("scan", result)))
+    payload = build_payload("scan", result)
+    payload["inventory_quantity"] = result["inventory_quantity"]
+    await manager.broadcast(json.dumps(payload))
     return ScanResponse(barcode=result["barcode"], session_delta=result["session_delta"])

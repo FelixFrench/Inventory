@@ -258,3 +258,41 @@ def test_ws_connect_and_receive(client, db):
         msg = ws.receive_json()
 
     assert msg["type"] == "scan"
+
+
+# ── Phase 3b: inventory_quantity in scan broadcast ───────────────────────────
+
+def test_scan_broadcast_includes_inventory_quantity(client, db):
+    _create_session(db)
+    db.execute("INSERT INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
+    db.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name) VALUES (?, ?, 'Beans')",
+        (_BARCODE, _RETAILER_ID),
+    )
+    db.execute(
+        "INSERT INTO prices (barcode, retailer_id, price_pence, price_type) VALUES (?, ?, 123, 'unit')",
+        (_BARCODE, _RETAILER_ID),
+    )
+    db.execute("INSERT INTO inventory (barcode, quantity) VALUES (?, 2)", (_BARCODE,))
+    db.commit()
+
+    with client.websocket_connect("/ws") as ws:
+        resp = client.post("/scan", json={"barcode": _BARCODE})
+        assert resp.status_code == 200
+        msg = ws.receive_json()
+
+    assert msg["inventory_quantity"] == 2
+
+
+def test_scan_broadcast_inventory_quantity_zero_for_unknown(client, db):
+    _create_session(db)
+    db.execute("INSERT INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
+    db.commit()
+    # No inventory row
+
+    with client.websocket_connect("/ws") as ws:
+        resp = client.post("/scan", json={"barcode": _BARCODE})
+        assert resp.status_code == 200
+        msg = ws.receive_json()
+
+    assert msg["inventory_quantity"] == 0
