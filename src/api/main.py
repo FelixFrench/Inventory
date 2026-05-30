@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from alembic import command
@@ -107,7 +107,7 @@ async def lifespan(app: FastAPI):
         if row:
             conn.execute(
                 "UPDATE sessions SET recovered_at = ? WHERE id = ?",
-                (datetime.utcnow().isoformat(), row["id"]),
+                (datetime.now(UTC).isoformat(), row["id"]),
             )
             logger.info(f"Session {row['id']} recovered after restart")
 

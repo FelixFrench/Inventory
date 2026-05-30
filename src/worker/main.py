@@ -4,7 +4,7 @@ import logging
 import sqlite3
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,7 +21,9 @@ OFF_RATE_LIMIT_SECS = 4
 
 def _compute_startup_sleep(off_last_called_at: str) -> float:
     last_called = datetime.fromisoformat(off_last_called_at)
-    elapsed = (datetime.utcnow() - last_called).total_seconds()
+    if last_called.tzinfo is None:
+        last_called = last_called.replace(tzinfo=UTC)
+    elapsed = (datetime.now(UTC) - last_called).total_seconds()
     return max(0.0, float(OFF_RATE_LIMIT_SECS) - elapsed)
 
 
@@ -42,7 +44,7 @@ def _phase1_success(barcode: str, session_id: int, retailer_id: int, result: dic
         )
         conn.execute(
             "UPDATE worker_state SET off_last_called_at = ? WHERE id = 1",
-            (datetime.utcnow().isoformat(),)
+            (datetime.now(UTC).isoformat(),)
         )
         conn.commit()
     except Exception:
@@ -65,7 +67,7 @@ def _phase1_failure(barcode: str, session_id: int) -> int:
         )
         conn.execute(
             "UPDATE worker_state SET off_last_called_at = ? WHERE id = 1",
-            (datetime.utcnow().isoformat(),)
+            (datetime.now(UTC).isoformat(),)
         )
         conn.commit()
     except Exception:

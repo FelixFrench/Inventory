@@ -1,7 +1,7 @@
 import asyncio
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -103,7 +103,7 @@ def start_session(body: StartSessionRequest, retailer_id: int = Depends(get_reta
                 )
             conn.execute(
                 "INSERT INTO sessions (type, started_at) VALUES (?, ?)",
-                (body.type, datetime.utcnow().isoformat())
+                (body.type, datetime.now(UTC).isoformat())
             )
             row = conn.execute(
                 "SELECT id, type, started_at, recovered_at FROM sessions ORDER BY id DESC LIMIT 1"

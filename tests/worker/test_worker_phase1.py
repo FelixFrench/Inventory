@@ -277,14 +277,14 @@ def test_worker_state_seed_row_exists(db):
 # ---------------------------------------------------------------------------
 
 def test_startup_sleep_required_when_recent_call():
-    recent = (datetime.utcnow() - timedelta(seconds=1)).isoformat()
+    recent = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
     result = _compute_startup_sleep(recent)
     assert result > 0
     assert abs(result - (OFF_RATE_LIMIT_SECS - 1)) < 0.1
 
 
 def test_startup_no_sleep_when_old_call():
-    old = (datetime.utcnow() - timedelta(seconds=10)).isoformat()
+    old = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
     result = _compute_startup_sleep(old)
     assert result == 0.0
 
