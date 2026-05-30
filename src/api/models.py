@@ -51,3 +51,7 @@ class ConfirmResponse(BaseModel):
 
 class DiscardResponse(BaseModel):
     discarded_session_id: int
+
+
+class DeltaUpdateRequest(BaseModel):
+    delta: int

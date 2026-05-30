@@ -1,5 +1,6 @@
+import json
 import sqlite3
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from starlette.testclient import TestClient
@@ -375,3 +376,150 @@ def test_discard_then_worker_writeback_keeps_data_rows(client, db):
     ).fetchone()
     assert pv is not None
     assert pv["name"] == "Baked Beans"
+
+
+_BARCODE2 = "5000112548167"
+
+# ---------------------------------------------------------------------------
+# Phase 3 Tests 20–29: PUT /session/items/{barcode}
+# ---------------------------------------------------------------------------
+
+def test_put_delta_updates_row(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved")
+
+    with patch("src.api.routers.session.manager") as mock_mgr:
+        mock_mgr.broadcast = AsyncMock()
+        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 4})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["barcode"] == _BARCODE
+    assert data["delta"] == 4
+    row = db.execute(
+        "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ?",
+        (session_id, _BARCODE)
+    ).fetchone()
+    assert row["delta"] == 4
+
+
+def test_put_delta_zero_allowed(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=3,
+               info_status="resolved", price_status="resolved")
+
+    with patch("src.api.routers.session.manager") as mock_mgr:
+        mock_mgr.broadcast = AsyncMock()
+        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 0})
+
+    assert resp.status_code == 200
+    assert resp.json()["delta"] == 0
+    row = db.execute(
+        "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ?",
+        (session_id, _BARCODE)
+    ).fetchone()
+    assert row is not None
+    assert row["delta"] == 0
+
+
+def test_put_delta_negative_rejected(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=2,
+               info_status="resolved", price_status="resolved")
+
+    resp = client.put(f"/session/items/{_BARCODE}", json={"delta": -1})
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error"] == "invalid_delta"
+
+
+def test_put_delta_barcode_not_in_session(client, db):
+    _start_session(client, "in")
+    # _BARCODE not seeded into session_items
+
+    with patch("src.api.routers.session.manager") as mock_mgr:
+        mock_mgr.broadcast = AsyncMock()
+        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error"] == "item_not_found"
+    mock_mgr.broadcast.assert_not_called()
+
+
+def test_put_delta_no_active_session(client, db):
+    with patch("src.api.routers.session.manager") as mock_mgr:
+        mock_mgr.broadcast = AsyncMock()
+        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error"] == "no_active_session"
+    mock_mgr.broadcast.assert_not_called()
+
+
+def test_put_delta_session_total_correct(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=3,
+               info_status="resolved", price_status="resolved")
+    _seed_item(db, _BARCODE2, session_id, delta=2,
+               info_status="resolved", price_status="resolved")
+
+    with patch("src.api.routers.session.manager") as mock_mgr:
+        mock_mgr.broadcast = AsyncMock()
+        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 1})
+
+    assert resp.status_code == 200
+    assert resp.json()["session_total_delta"] == 3  # 1 + 2
+
+
+def test_confirm_mixed_session_skips_zero_delta(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=3,
+               info_status="resolved", price_status="resolved")
+    _seed_item(db, _BARCODE2, session_id, delta=0,
+               info_status="resolved", price_status="resolved")
+
+    resp = client.post("/session/confirm")
+    assert resp.status_code == 200
+    assert resp.json()["applied_items"] == 1
+
+    qty = db.execute("SELECT quantity FROM inventory WHERE barcode = ?", (_BARCODE,)).fetchone()
+    assert qty["quantity"] == 3
+    assert db.execute("SELECT quantity FROM inventory WHERE barcode = ?", (_BARCODE2,)).fetchone() is None
+
+
+def test_put_delta_broadcasts_delta_update(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved")
+
+    with patch("src.api.routers.session.manager") as mock_mgr:
+        mock_mgr.broadcast = AsyncMock()
+        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 5})
+
+    assert resp.status_code == 200
+    mock_mgr.broadcast.assert_called_once()
+    payload = json.loads(mock_mgr.broadcast.call_args[0][0])
+    assert payload["type"] == "delta_update"
+    assert payload["barcode"] == _BARCODE
+    assert payload["session_delta"] == 5
+    assert payload["session_total_delta"] == 5
+
+
+def test_put_delta_no_broadcast_no_session(client, db):
+    with patch("src.api.routers.session.manager") as mock_mgr:
+        mock_mgr.broadcast = AsyncMock()
+        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+
+    assert resp.status_code == 409
+    mock_mgr.broadcast.assert_not_called()
+
+
+def test_put_delta_no_broadcast_item_not_found(client, db):
+    _start_session(client, "in")
+
+    with patch("src.api.routers.session.manager") as mock_mgr:
+        mock_mgr.broadcast = AsyncMock()
+        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+
+    assert resp.status_code == 404
+    mock_mgr.broadcast.assert_not_called()

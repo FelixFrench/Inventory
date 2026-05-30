@@ -75,7 +75,7 @@ function makeRowHTML(barcode) {
     const deltaSign  = sessionType === 'out' ? '−' : '+';
     const meta = [renderField(r.brand), renderField(r.weight), renderPrice(r.price)].join(' · ');
 
-    // TODO Phase 3: wire quantity controls to PUT /session/items/{barcode}
+    const decDisabled = r.session_delta === 0 ? ' disabled' : '';
     return `
       <div class="feed-row-top">
         <span class="feed-item-name">${renderField(r.name)}</span>
@@ -83,9 +83,9 @@ function makeRowHTML(barcode) {
       </div>
       <div class="feed-item-meta">${meta}</div>
       <div class="feed-item-qty">
-        <button disabled aria-label="Decrease">−</button>
-        <span class="qty-count">${r.session_delta}</span>
-        <button disabled aria-label="Increase">+</button>
+        <button class="qty-btn" data-action="decrement" data-barcode="${esc(barcode)}"${decDisabled} aria-label="Decrease">−</button>
+        <span class="qty-count" data-barcode="${esc(barcode)}">${r.session_delta}</span>
+        <button class="qty-btn" data-action="increment" data-barcode="${esc(barcode)}" aria-label="Increase">+</button>
       </div>`;
 }
 
@@ -101,6 +101,79 @@ function addRowToFeed(barcode, prepend = false) {
     li.className = 'feed-row';
     li.innerHTML = makeRowHTML(barcode);
     prepend ? list.prepend(li) : list.append(li);
+}
+
+// ── Quantity controls ────────────────────────────────────────────────────────
+
+async function handleDeltaChange(barcode, diff) {
+    const newDelta = Math.max(0, (rows[barcode]?.session_delta ?? 0) + diff);
+    try {
+        const resp = await fetch(`/session/items/${encodeURIComponent(barcode)}`, {
+            method: 'PUT',
+            headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ delta: newDelta }),
+        });
+        if (resp.ok) {
+            rows[barcode].session_delta = newDelta;
+            updateRowDOM(barcode);
+            updateBanner();
+        }
+    } catch (_) {}
+}
+
+function activateInlineEdit(span) {
+    const barcode = span.dataset.barcode;
+    const current = rows[barcode]?.session_delta ?? 0;
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.inputMode = 'numeric';
+    input.value = current;
+    input.className = 'qty-inline-input';
+    span.replaceWith(input);
+    input.select();
+
+    async function commit() {
+        const val = Math.max(0, parseInt(input.value) || 0);
+        const li = input.closest('li');
+        if (li) li.dataset.editing = '';
+        // Restore span before the async call so the row is usable immediately
+        const newSpan = document.createElement('span');
+        newSpan.className = 'qty-count';
+        newSpan.dataset.barcode = barcode;
+        newSpan.textContent = val;
+        input.replaceWith(newSpan);
+        if (val !== current) {
+            rows[barcode].session_delta = val;
+            updateRowDOM(barcode);
+            updateBanner();
+            try {
+                await fetch(`/session/items/${encodeURIComponent(barcode)}`, {
+                    method: 'PUT',
+                    headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ delta: val }),
+                });
+            } catch (_) {}
+        }
+    }
+
+    function cancel() {
+        const li = input.closest('li');
+        if (li) li.dataset.editing = '';
+        const newSpan = document.createElement('span');
+        newSpan.className = 'qty-count';
+        newSpan.dataset.barcode = barcode;
+        newSpan.textContent = current;
+        input.replaceWith(newSpan);
+    }
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+    input.addEventListener('blur', commit);
+    const li = input.closest('li');
+    if (li) li.dataset.editing = 'true';
 }
 
 // ── WebSocket message handler ────────────────────────────────────────────────
@@ -124,6 +197,11 @@ function handleWSMessage(msg) {
     } else if (msg.type === 'resolution') {
         if (rows[msg.barcode] !== undefined) {
             _storeRow(msg.barcode, msg);
+            updateRowDOM(msg.barcode);
+        }
+    } else if (msg.type === 'delta_update') {
+        if (rows[msg.barcode] !== undefined) {
+            rows[msg.barcode].session_delta = msg.session_delta;
             updateRowDOM(msg.barcode);
         }
     }
@@ -301,6 +379,24 @@ async function init() {
     document.getElementById('btn-keep').addEventListener('click', hideDiscardModal);
     document.getElementById('btn-close-negative').addEventListener('click', () => {
         document.getElementById('negative-modal').classList.remove('visible');
+    });
+
+    document.getElementById('feed-list').addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (btn && !btn.disabled) {
+            const barcode = btn.dataset.barcode;
+            const li = btn.closest('li');
+            if (li && li.dataset.editing === 'true') return;
+            if (btn.dataset.action === 'decrement') handleDeltaChange(barcode, -1);
+            if (btn.dataset.action === 'increment') handleDeltaChange(barcode, +1);
+            return;
+        }
+        const span = e.target.closest('.qty-count[data-barcode]');
+        if (span) {
+            const li = span.closest('li');
+            if (li && li.dataset.editing === 'true') return;
+            activateInlineEdit(span);
+        }
     });
 
     try {
