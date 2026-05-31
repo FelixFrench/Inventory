@@ -18,6 +18,11 @@ from src.api.routers.ws import build_payload, manager
 from src.api.routers.ws import router as ws_router
 from src.db.db import get_connection
 
+import os
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parents[2] / "config.local.env")
+
+
 logger = logging.getLogger(__name__)
 
 POLL_QUERY = """
