@@ -18,6 +18,11 @@ from src.api.routers.ws import build_payload, manager
 from src.api.routers.ws import router as ws_router
 from src.db.db import get_connection
 
+import os
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parents[2] / "config.local.env")
+
+
 logger = logging.getLogger(__name__)
 
 POLL_QUERY = """
@@ -64,17 +69,17 @@ async def _poll_tick(rows, last_seen: dict) -> None:
 
 async def _session_poll_loop(retailer_id: int) -> None:
     last_seen: dict[str, tuple[str, str]] = {}
-    while True:
-        try:
-            conn = get_connection()
+    conn = get_connection()
+    try:
+        while True:
             try:
                 rows = conn.execute(POLL_QUERY, (retailer_id, retailer_id)).fetchall()
-            finally:
-                conn.close()
-            await _poll_tick(rows, last_seen)
-        except Exception:
-            logger.exception("Poll loop tick failed")
-        await asyncio.sleep(1)
+                await _poll_tick(rows, last_seen)
+            except Exception:
+                logger.exception("Poll loop tick failed")
+            await asyncio.sleep(1)
+    finally:
+        conn.close()
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -94,6 +99,9 @@ async def lifespan(app: FastAPI):
     _PROJECT_ROOT = Path(__file__).parents[2]
     alembic_cfg = Config(str(_PROJECT_ROOT / "alembic.ini"))
     command.upgrade(alembic_cfg, "head")
+    if os.environ.get("INVENTORY_API_KEY") is None:
+       raise RuntimeError("INVENTORY_API_KEY not set in environment or config.local.env")
+
 
     conn = get_connection()
     try:

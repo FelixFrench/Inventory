@@ -17,145 +17,157 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _table_exists(name: str) -> bool:
+    conn = op.get_bind()
+    row = conn.execute(
+        sa.text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:n"),
+        {"n": name}
+    ).fetchone()
+    return row is not None
+
+
 def upgrade() -> None:
     op.execute("PRAGMA foreign_keys = OFF")
 
-    # Drop transient / unreferenced tables
-    op.drop_table('pending_lookups')
-    op.drop_table('canonical_products')
+    is_v10 = _table_exists('pending_lookups')
 
-    # Create Phase 1 replacement tables before migrating data
-    op.create_table(
-        'new_barcodes',
-        sa.Column('barcode', sa.Text(), nullable=False),
-        sa.PrimaryKeyConstraint('barcode'),
-    )
+    if is_v10:
+        # Drop transient / unreferenced tables
+        op.drop_table('pending_lookups')
+        op.drop_table('canonical_products')
 
-    op.create_table(
-        'new_product_variants',
-        sa.Column('barcode', sa.Text(), nullable=False),
-        sa.Column('retailer_id', sa.Integer(), nullable=False),
-        sa.Column('name', sa.Text()),
-        sa.Column('brand', sa.Text()),
-        sa.Column('weight_g', sa.Float()),
-        sa.PrimaryKeyConstraint('barcode', 'retailer_id'),
-        sa.ForeignKeyConstraint(['barcode'], ['new_barcodes.barcode']),
-        sa.ForeignKeyConstraint(['retailer_id'], ['retailers.id']),
-    )
+        # Create Phase 1 replacement tables before migrating data
+        op.create_table(
+            'new_barcodes',
+            sa.Column('barcode', sa.Text(), nullable=False),
+            sa.PrimaryKeyConstraint('barcode'),
+        )
 
-    op.create_table(
-        'new_prices',
-        sa.Column('barcode', sa.Text(), nullable=False),
-        sa.Column('retailer_id', sa.Integer(), nullable=False),
-        sa.Column('price_pence', sa.Integer()),
-        sa.Column('price_type', sa.Text(), nullable=False, server_default='unit'),
-        sa.PrimaryKeyConstraint('barcode', 'retailer_id'),
-        sa.ForeignKeyConstraint(['barcode'], ['new_barcodes.barcode']),
-        sa.CheckConstraint("price_type IN ('unit', 'per_kg')", name='new_prices_price_type_check'),
-    )
+        op.create_table(
+            'new_product_variants',
+            sa.Column('barcode', sa.Text(), nullable=False),
+            sa.Column('retailer_id', sa.Integer(), nullable=False),
+            sa.Column('name', sa.Text()),
+            sa.Column('brand', sa.Text()),
+            sa.Column('weight_g', sa.Float()),
+            sa.PrimaryKeyConstraint('barcode', 'retailer_id'),
+            sa.ForeignKeyConstraint(['barcode'], ['new_barcodes.barcode']),
+            sa.ForeignKeyConstraint(['retailer_id'], ['retailers.id']),
+        )
 
-    op.create_table(
-        'new_inventory',
-        sa.Column('barcode', sa.Text(), nullable=False),
-        sa.Column('quantity', sa.Integer(), nullable=False, server_default='0'),
-        sa.Column('minimum_quantity', sa.Integer(), nullable=False, server_default='0'),
-        sa.PrimaryKeyConstraint('barcode'),
-        sa.ForeignKeyConstraint(['barcode'], ['new_barcodes.barcode']),
-    )
+        op.create_table(
+            'new_prices',
+            sa.Column('barcode', sa.Text(), nullable=False),
+            sa.Column('retailer_id', sa.Integer(), nullable=False),
+            sa.Column('price_pence', sa.Integer()),
+            sa.Column('price_type', sa.Text(), nullable=False, server_default='unit'),
+            sa.PrimaryKeyConstraint('barcode', 'retailer_id'),
+            sa.ForeignKeyConstraint(['barcode'], ['new_barcodes.barcode']),
+            sa.CheckConstraint("price_type IN ('unit', 'per_kg')", name='new_prices_price_type_check'),
+        )
 
-    # Migrate live data while old tables still exist
-    op.execute(
-        "INSERT INTO new_barcodes (barcode) "
-        "SELECT DISTINCT barcode FROM barcodes"
-    )
-    op.execute(
-        "INSERT INTO new_product_variants (barcode, retailer_id, name, brand, weight_g) "
-        "SELECT b.barcode, b.retailer_id, pv.name, pv.brand, pv.weight_g "
-        "FROM product_variants pv "
-        "JOIN barcodes b ON b.product_variant_id = pv.id"
-    )
-    op.execute(
-        "INSERT INTO new_prices (barcode, retailer_id, price_pence, price_type) "
-        "SELECT b.barcode, p.retailer_id, p.price_pence, p.price_type "
-        "FROM prices p "
-        "JOIN product_variants pv ON pv.id = p.product_variant_id "
-        "JOIN barcodes b ON b.product_variant_id = pv.id"
-    )
-    op.execute(
-        "INSERT INTO new_inventory (barcode, quantity, minimum_quantity) "
-        "SELECT b.barcode, i.quantity, i.minimum_quantity "
-        "FROM inventory i "
-        "JOIN product_variants pv ON pv.id = i.product_variant_id "
-        "JOIN barcodes b ON b.product_variant_id = pv.id"
-    )
+        op.create_table(
+            'new_inventory',
+            sa.Column('barcode', sa.Text(), nullable=False),
+            sa.Column('quantity', sa.Integer(), nullable=False, server_default='0'),
+            sa.Column('minimum_quantity', sa.Integer(), nullable=False, server_default='0'),
+            sa.PrimaryKeyConstraint('barcode'),
+            sa.ForeignKeyConstraint(['barcode'], ['new_barcodes.barcode']),
+        )
 
-    # Drop old tables
-    op.drop_table('inventory')
-    op.drop_table('prices')
-    op.drop_table('product_variants')
-    op.drop_table('barcodes')
+        # Migrate live data while old tables still exist
+        op.execute(
+            "INSERT INTO new_barcodes (barcode) "
+            "SELECT DISTINCT barcode FROM barcodes"
+        )
+        op.execute(
+            "INSERT INTO new_product_variants (barcode, retailer_id, name, brand, weight_g) "
+            "SELECT b.barcode, b.retailer_id, pv.name, pv.brand, pv.weight_g "
+            "FROM product_variants pv "
+            "JOIN barcodes b ON b.product_variant_id = pv.id"
+        )
+        op.execute(
+            "INSERT INTO new_prices (barcode, retailer_id, price_pence, price_type) "
+            "SELECT b.barcode, p.retailer_id, p.price_pence, p.price_type "
+            "FROM prices p "
+            "JOIN product_variants pv ON pv.id = p.product_variant_id "
+            "JOIN barcodes b ON b.product_variant_id = pv.id"
+        )
+        op.execute(
+            "INSERT INTO new_inventory (barcode, quantity, minimum_quantity) "
+            "SELECT b.barcode, i.quantity, i.minimum_quantity "
+            "FROM inventory i "
+            "JOIN product_variants pv ON pv.id = i.product_variant_id "
+            "JOIN barcodes b ON b.product_variant_id = pv.id"
+        )
 
-    # Rename new tables into place
-    op.execute("ALTER TABLE new_inventory RENAME TO inventory")
-    op.execute("ALTER TABLE new_prices RENAME TO prices")
-    op.execute("ALTER TABLE new_product_variants RENAME TO product_variants")
-    op.execute("ALTER TABLE new_barcodes RENAME TO barcodes")
+        # Drop old tables
+        op.drop_table('inventory')
+        op.drop_table('prices')
+        op.drop_table('product_variants')
+        op.drop_table('barcodes')
 
-    # Sessions table
-    op.create_table(
-        'sessions',
-        sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('type', sa.Text(), nullable=False),
-        sa.Column('started_at', sa.Text(), nullable=False),
-        sa.Column('recovered_at', sa.Text(), nullable=True),
-        sa.PrimaryKeyConstraint('id'),
-        sa.CheckConstraint("type IN ('in', 'out')", name='sessions_type_check'),
-    )
+        # Rename new tables into place
+        op.execute("ALTER TABLE new_inventory RENAME TO inventory")
+        op.execute("ALTER TABLE new_prices RENAME TO prices")
+        op.execute("ALTER TABLE new_product_variants RENAME TO product_variants")
+        op.execute("ALTER TABLE new_barcodes RENAME TO barcodes")
 
-    # Session items table
-    op.create_table(
-        'session_items',
-        sa.Column('session_id', sa.Integer(), nullable=False),
-        sa.Column('barcode', sa.Text(), nullable=False),
-        sa.Column('delta', sa.Integer(), nullable=False),
-        sa.Column('info_status', sa.Text(), nullable=False, server_default='pending'),
-        sa.Column('price_status', sa.Text(), nullable=False, server_default='pending'),
-        sa.Column('first_scanned_at', sa.Text(), nullable=False),
-        sa.PrimaryKeyConstraint('session_id', 'barcode'),
-        sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['barcode'], ['barcodes.barcode']),
-        sa.CheckConstraint('delta >= 0', name='session_items_delta_nonneg'),
-        sa.CheckConstraint(
-            "info_status IN ('pending', 'resolved', 'failed')",
-            name='session_items_info_status_check'
-        ),
-        sa.CheckConstraint(
-            "price_status IN ('pending', 'resolved', 'failed', 'not_possible')",
-            name='session_items_price_status_check'
-        ),
-    )
+        # Sessions table
+        op.create_table(
+            'sessions',
+            sa.Column('id', sa.Integer(), nullable=False),
+            sa.Column('type', sa.Text(), nullable=False),
+            sa.Column('started_at', sa.Text(), nullable=False),
+            sa.Column('recovered_at', sa.Text(), nullable=True),
+            sa.PrimaryKeyConstraint('id'),
+            sa.CheckConstraint("type IN ('in', 'out')", name='sessions_type_check'),
+        )
 
-    # Partial indexes — Alembic create_index does not support WHERE clauses
-    op.execute(
-        "CREATE INDEX idx_session_items_info_pending "
-        "ON session_items(first_scanned_at) "
-        "WHERE info_status = 'pending'"
-    )
-    op.execute(
-        "CREATE INDEX idx_session_items_price_pending "
-        "ON session_items(first_scanned_at) "
-        "WHERE price_status = 'pending'"
-    )
+        # Session items table
+        op.create_table(
+            'session_items',
+            sa.Column('session_id', sa.Integer(), nullable=False),
+            sa.Column('barcode', sa.Text(), nullable=False),
+            sa.Column('delta', sa.Integer(), nullable=False),
+            sa.Column('info_status', sa.Text(), nullable=False, server_default='pending'),
+            sa.Column('price_status', sa.Text(), nullable=False, server_default='pending'),
+            sa.Column('first_scanned_at', sa.Text(), nullable=False),
+            sa.PrimaryKeyConstraint('session_id', 'barcode'),
+            sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], ondelete='CASCADE'),
+            sa.ForeignKeyConstraint(['barcode'], ['barcodes.barcode']),
+            sa.CheckConstraint('delta >= 0', name='session_items_delta_nonneg'),
+            sa.CheckConstraint(
+                "info_status IN ('pending', 'resolved', 'failed')",
+                name='session_items_info_status_check'
+            ),
+            sa.CheckConstraint(
+                "price_status IN ('pending', 'resolved', 'failed', 'not_possible')",
+                name='session_items_price_status_check'
+            ),
+        )
 
-    # Worker state singleton — epoch sentinel ensures first OFF call satisfies the 4s gap
-    op.create_table(
-        'worker_state',
-        sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('off_last_called_at', sa.Text(), nullable=False),
-        sa.PrimaryKeyConstraint('id'),
-        sa.CheckConstraint('id = 1', name='worker_state_singleton'),
-    )
-    op.execute("INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00')")
+        # Partial indexes — Alembic create_index does not support WHERE clauses
+        op.execute(
+            "CREATE INDEX idx_session_items_info_pending "
+            "ON session_items(first_scanned_at) "
+            "WHERE info_status = 'pending'"
+        )
+        op.execute(
+            "CREATE INDEX idx_session_items_price_pending "
+            "ON session_items(first_scanned_at) "
+            "WHERE price_status = 'pending'"
+        )
+
+        # Worker state singleton — epoch sentinel ensures first OFF call satisfies the 4s gap
+        op.create_table(
+            'worker_state',
+            sa.Column('id', sa.Integer(), nullable=False),
+            sa.Column('off_last_called_at', sa.Text(), nullable=False),
+            sa.PrimaryKeyConstraint('id'),
+            sa.CheckConstraint('id = 1', name='worker_state_singleton'),
+        )
+        op.execute("INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00')")
 
     op.execute("DELETE FROM config WHERE key = 'scan_mode'")
 

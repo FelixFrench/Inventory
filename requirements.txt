@@ -9,3 +9,4 @@ httpx
 pytest
 types-requests
 mypy
+httpx2
