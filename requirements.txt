@@ -4,7 +4,7 @@ alembic
 sqlalchemy
 requests
 python-dotenv
-evdev
+evdev; sys_platform == "linux" and platform_machine == "aarch64"
 httpx
 pytest
 types-requests
