@@ -64,17 +64,17 @@ async def _poll_tick(rows, last_seen: dict) -> None:
 
 async def _session_poll_loop(retailer_id: int) -> None:
     last_seen: dict[str, tuple[str, str]] = {}
-    while True:
-        try:
-            conn = get_connection()
+    conn = get_connection()
+    try:
+        while True:
             try:
                 rows = conn.execute(POLL_QUERY, (retailer_id, retailer_id)).fetchall()
-            finally:
-                conn.close()
-            await _poll_tick(rows, last_seen)
-        except Exception:
-            logger.exception("Poll loop tick failed")
-        await asyncio.sleep(1)
+                await _poll_tick(rows, last_seen)
+            except Exception:
+                logger.exception("Poll loop tick failed")
+            await asyncio.sleep(1)
+    finally:
+        conn.close()
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
