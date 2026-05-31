@@ -94,6 +94,9 @@ async def lifespan(app: FastAPI):
     _PROJECT_ROOT = Path(__file__).parents[2]
     alembic_cfg = Config(str(_PROJECT_ROOT / "alembic.ini"))
     command.upgrade(alembic_cfg, "head")
+    if os.environ.get("INVENTORY_API_KEY") is None:
+       raise RuntimeError("INVENTORY_API_KEY not set in environment or config.local.env")
+
 
     conn = get_connection()
     try:

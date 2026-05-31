@@ -17,3 +17,4 @@ __pycache__/
 config.local.env
 frontend/config.js
 .coverage
+uvicorn.log
