@@ -128,7 +128,7 @@ function renderProducts(products) {
       const metaDiv = document.createElement('div');
       metaDiv.className = 'product-meta';
       const parts = [p.brand, p.weight].filter(Boolean).map(esc);
-      metaDiv.textContent = parts.join(' · ');
+      metaDiv.innerHTML = parts.join(' · ');
       li.appendChild(metaDiv);
     }
 
