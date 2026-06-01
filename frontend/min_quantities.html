@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Minimum Quantities — Inventory</title>
+  <link rel="stylesheet" href="min_quantities.css">
+</head>
+<body>
+  <header>Inventory</header>
+  <nav>
+    <a href="/inventory.html">Inventory</a>
+    <a href="/low_stock.html">Low Stock</a>
+    <a href="/feed.html">Feed</a>
+    <a href="/reports/unresolved.html">Unresolved</a>
+  </nav>
+  <main>
+    <h1>Minimum Quantities</h1>
+    <p class="descriptor">Tap a minimum to edit it.</p>
+    <p id="loading-msg" class="loading">Loading</p>
+    <p id="error-msg" hidden class="error-msg"></p>
+    <ul id="product-list" hidden></ul>
+  </main>
+  <script src="/config.js"></script>
+  <script src="/min_quantities.js"></script>
+</body>
+</html>
