@@ -56,3 +56,7 @@ class DiscardResponse(BaseModel):
 
 class DeltaUpdateRequest(BaseModel):
     delta: int
+
+
+class SetMinimumQuantityRequest(BaseModel):
+    minimum_quantity: int
