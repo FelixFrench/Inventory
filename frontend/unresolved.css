@@ -110,10 +110,4 @@ tbody td {
 .badge--missing       { background: #f39c12; color: #fff; }
 .badge--per-kg        { background: #8e44ad; color: #fff; }
 .badge--active-session { background: #2980b9; color: #fff; }
-
-@media (max-width: 640px) {
-  .col-brand,
-  .col-weight {
-    display: none;
-  }
 }
