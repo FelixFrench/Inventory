@@ -36,12 +36,12 @@ function renderTable(items) {
 
   const thead = document.createElement('thead');
   thead.innerHTML = `<tr>
-    <th>Product</th>
+    <th>Barcode</th>
+    <th>Name</th>
     <th class="col-brand">Brand</th>
     <th class="col-weight">Weight</th>
     <th>Price</th>
     <th>In Stock</th>
-    <th>Session</th>
   </tr>`;
   table.appendChild(thead);
 
@@ -49,17 +49,16 @@ function renderTable(items) {
   for (const item of items) {
     const tr = document.createElement('tr');
 
-    // Product cell: name if resolved, else barcode as fallback
-    const tdProduct = document.createElement('td');
-    if (item.name.label === 'resolved') {
-      tdProduct.textContent = item.name.value;
-    } else {
-      const code = document.createElement('span');
-      code.className = 'barcode-fallback';
-      code.textContent = item.barcode;
-      tdProduct.appendChild(code);
-    }
-    tr.appendChild(tdProduct);
+    // Barcode — always plain text
+    const tdBarcode = document.createElement('td');
+    tdBarcode.className = 'barcode-fallback';
+    tdBarcode.textContent = item.barcode;
+    tr.appendChild(tdBarcode);
+
+    // Name — value or badge, same as Brand/Weight
+    const tdName = document.createElement('td');
+    tdName.appendChild(renderField(item.name));
+    tr.appendChild(tdName);
 
     // Brand
     const tdBrand = document.createElement('td');
@@ -82,14 +81,6 @@ function renderTable(items) {
     const tdStock = document.createElement('td');
     tdStock.textContent = item.inventory_quantity;
     tr.appendChild(tdStock);
-
-    // Session
-    const tdSession = document.createElement('td');
-    if (item.in_active_session) {
-      tdSession.appendChild(makeBadge('active-session'));
-      tdSession.querySelector('.badge--active-session').textContent = 'Active';
-    }
-    tr.appendChild(tdSession);
 
     tbody.appendChild(tr);
   }
