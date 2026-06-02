@@ -1,7 +1,7 @@
 import logging
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from src.api import reports as report_assembly
 from src.api.dependencies import get_db
@@ -39,3 +39,9 @@ def get_low_stock(db: sqlite3.Connection = Depends(get_db)):
     except Exception as e:
         logger.error("DB error fetching low-stock report: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/reports/unresolved")
+def get_unresolved(request: Request, db: sqlite3.Connection = Depends(get_db)):
+    retailer_id = request.app.state.sainsburys_retailer_id
+    return report_assembly.get_unresolved_report(db, retailer_id)
