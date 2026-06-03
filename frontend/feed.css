@@ -1,10 +1,5 @@
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #1a1a1a; min-height: 100vh; display: flex; flex-direction: column; }
-header { background: #1a1a1a; color: #fff; padding: 16px 20px; font-size: 1.1rem; font-weight: 600; }
-nav { background: #2a2a2a; display: flex; gap: 0; flex-shrink: 0; }
-nav a { color: #ccc; text-decoration: none; padding: 12px 20px; font-size: 0.95rem; }
-nav a:hover { background: #3a3a3a; color: #fff; }
-nav a.active { color: #fff; border-bottom: 3px solid #4a9eff; }
+nav { flex-shrink: 0; }
+main { padding: 0; position: relative; }
 
 /* Status banner */
 #banner { display: flex; align-items: center; justify-content: space-between; padding: 10px 20px; font-size: 0.95rem; font-weight: 600; flex-shrink: 0; }
@@ -13,9 +8,6 @@ nav a.active { color: #fff; border-bottom: 3px solid #4a9eff; }
 .banner-out  { background: #FAECE7; color: #993C1D; }
 #btn-end-session { background: #3B6D11; color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 0.85rem; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .banner-out #btn-end-session { background: #993C1D; }
-
-/* Main / content area */
-main { flex: 1; max-width: 800px; margin: 0 auto; width: 100%; position: relative; }
 
 /* No-session start buttons */
 #no-session { padding: 24px 16px; display: flex; flex-direction: column; gap: 12px; }
@@ -39,7 +31,6 @@ main { flex: 1; max-width: 800px; margin: 0 auto; width: 100%; position: relativ
 .feed-row--warning { border-left: 3px solid #993C1D; background-color: #FAECE7; }
 .feed-row--warning .feed-item-stock { color: #993C1D; }
 
-.muted        { color: #aaa; }
 .italic-muted { color: #aaa; font-style: italic; }
 
 /* Dim overlay (inside main, covers content only) */
@@ -78,5 +69,3 @@ main { flex: 1; max-width: 800px; margin: 0 auto; width: 100%; position: relativ
 /* Recovery toast */
 #toast { display: none; position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: #1a1a1a; color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 0.875rem; z-index: 40; white-space: nowrap; cursor: pointer; }
 #toast.visible { display: block; }
-
-.hidden { display: none; }

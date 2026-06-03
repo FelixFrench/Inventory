@@ -1,28 +1,5 @@
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #1a1a1a; min-height: 100vh; display: flex; flex-direction: column; }
-header { background: #1a1a1a; color: #fff; padding: 16px 20px; font-size: 1.1rem; font-weight: 600; }
-nav { background: #2a2a2a; display: flex; gap: 0; }
-nav a { color: #ccc; text-decoration: none; padding: 12px 20px; font-size: 0.95rem; }
-nav a:hover { background: #3a3a3a; color: #fff; }
-nav a.active { color: #fff; border-bottom: 3px solid #4a9eff; }
-main { flex: 1; padding: 24px 16px; max-width: 800px; margin: 0 auto; width: 100%; }
-h1 { font-size: 1.4rem; margin-bottom: 20px; color: #1a1a1a; }
-.loading { color: #666; font-size: 1rem; padding: 32px 0; text-align: center; }
-.loading::after { content: ''; display: inline-block; width: 20px; height: 20px; border: 3px solid #ccc; border-top-color: #444; border-radius: 50%; animation: spin 0.8s linear infinite; margin-left: 10px; vertical-align: middle; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.empty { color: #2d7d46; background: #eaf6ed; border: 1px solid #b8e0c2; border-radius: 8px; padding: 20px 16px; text-align: center; font-size: 1rem; }
-.error-msg { color: #c0392b; background: #fdf0ef; border: 1px solid #f5c6c2; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
-th { background: #1a1a1a; color: #fff; text-align: left; padding: 12px 14px; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 th.shortfall-col, td.shortfall-col { text-align: center; }
-td { padding: 13px 14px; border-bottom: 1px solid #eee; font-size: 0.95rem; vertical-align: top; }
-tr:last-child td { border-bottom: none; }
-tr:hover td { background: #f9f9f9; }
-.brand { color: #666; font-size: 0.85rem; margin-top: 2px; }
 .shortfall-badge { display: inline-block; background: #c0392b; color: #fff; font-weight: 700; font-size: 1.1rem; border-radius: 50%; width: 36px; height: 36px; line-height: 36px; text-align: center; }
-
 .min-qty-link { margin-bottom: 16px; font-size: 0.9rem; }
 .min-qty-link a { color: #1a73e8; text-decoration: none; }
 .min-qty-link a:hover { text-decoration: underline; }
-
-.hidden { display: none; }

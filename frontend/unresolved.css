@@ -1,108 +1,18 @@
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+header { padding: 12px 16px; }
+nav { gap: 4px; padding: 0 8px; }
+nav a { padding: 10px 14px; font-size: 0.9rem; border-bottom: 3px solid transparent; }
+nav a.active { border-bottom-color: #4a9eff; }
+main { max-width: 1100px; }
 
-body {
-  font-family: sans-serif;
-  background: #f5f5f5;
-  color: #1a1a1a;
-}
+table { border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+thead th { background: #2a2a2a; padding: 10px 14px; text-transform: none; letter-spacing: 0; white-space: nowrap; }
+tbody td { padding: 10px 14px; font-size: 0.9rem; vertical-align: middle; border-bottom: none; }
+tbody tr:nth-child(even) { background: #f9f9f9; }
+tr:hover td { background: inherit; }
 
-header {
-  background: #1a1a1a;
-  color: #fff;
-  padding: 12px 16px;
-  font-size: 1.1rem;
-  font-weight: 600;
-}
-
-nav {
-  background: #2a2a2a;
-  display: flex;
-  gap: 4px;
-  padding: 0 8px;
-}
-
-nav a {
-  color: #ccc;
-  text-decoration: none;
-  padding: 10px 14px;
-  font-size: 0.9rem;
-  border-bottom: 3px solid transparent;
-}
-
-nav a:hover {
-  background: #3a3a3a;
-  color: #fff;
-}
-
-nav a.active {
-  color: #fff;
-  border-bottom-color: #4a9eff;
-}
-
-main {
-  padding: 24px 16px;
-  max-width: 1100px;
-  margin: 0 auto;
-}
-
-h1 {
-  font-size: 1.4rem;
-  margin-bottom: 20px;
-}
-
-.status-msg {
-  color: #555;
-  font-size: 0.95rem;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  background: #fff;
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-}
-
-thead th {
-  background: #2a2a2a;
-  color: #fff;
-  text-align: left;
-  padding: 10px 14px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-tbody tr:nth-child(even) {
-  background: #f9f9f9;
-}
-
-tbody td {
-  padding: 10px 14px;
-  font-size: 0.9rem;
-  vertical-align: middle;
-}
-
-.barcode-fallback {
-  font-family: monospace;
-  color: #888;
-  font-size: 0.85rem;
-}
-
-.badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
+.status-msg { color: #555; font-size: 0.95rem; }
+.barcode-fallback { font-family: monospace; color: #888; font-size: 0.85rem; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
 .badge--pending       { background: #e0e0e0; color: #555; font-style: italic; }
 .badge--failed        { background: #c0392b; color: #fff; }
 .badge--not-attempted { background: #e67e22; color: #fff; }
@@ -110,4 +20,3 @@ tbody td {
 .badge--missing       { background: #f39c12; color: #fff; }
 .badge--per-kg        { background: #8e44ad; color: #fff; }
 .badge--active-session { background: #2980b9; color: #fff; }
-}
