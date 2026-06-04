@@ -10,3 +10,4 @@ pytest
 types-requests
 mypy
 httpx2
+python-escpos
