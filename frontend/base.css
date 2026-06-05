@@ -24,7 +24,7 @@ tfoot td { font-weight: 700; background: #f0f0f0; border-top: 2px solid #ddd; }
 
 /* Print button (report pages) */
 .report-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 0.5rem; }
-.btn-print { padding: 0.4rem 1rem; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; font-size: 0.95rem; white-space: nowrap; }
+.btn-print { padding: 0.4rem 1rem; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; font-size: 0.95rem; white-space: nowrap; margin-bottom: 20px; }
 .btn-print:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* Toast notifications */
