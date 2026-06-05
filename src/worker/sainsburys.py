@@ -115,7 +115,10 @@ def get_price(barcode: str, name: str, brand: str, weight_g: float) -> dict | No
                 logging.debug(f"Sainsbury's: found EAN match on page {page} for barcode {barcode}")
                 price = _extract_price(product)
                 if price is not None:
-                    price["product_url"] = product.get("full_url") or None
+                    url = product.get("full_url") or None
+                    if url and url.startswith("://"):
+                        url = "https" + url
+                    price["product_url"] = url
                 return price
 
         if page < _MAX_PAGES:
