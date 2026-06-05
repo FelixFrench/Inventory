@@ -109,11 +109,11 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
 def get_inventory_report(db, retailer_id: int) -> dict:
     rows = db.execute(
         """
-        SELECT pv.name, pv.brand, i.quantity, p.price_pence
+        SELECT COALESCE(pv.name, i.barcode) AS name, pv.brand, i.quantity, p.price_pence
         FROM inventory i
-        JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = ?
+        LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = ?
         LEFT JOIN prices p ON p.barcode = i.barcode AND p.retailer_id = ?
-        ORDER BY (i.quantity = 0), LOWER(pv.name)
+        ORDER BY (i.quantity = 0), LOWER(COALESCE(pv.name, i.barcode))
         """,
         (retailer_id, retailer_id)
     ).fetchall()
@@ -137,12 +137,12 @@ def get_inventory_report(db, retailer_id: int) -> dict:
 def get_low_stock_report(db, retailer_id: int) -> dict:
     rows = db.execute(
         """
-        SELECT pv.name, pv.brand, i.quantity, i.minimum_quantity,
+        SELECT COALESCE(pv.name, i.barcode) AS name, pv.brand, i.quantity, i.minimum_quantity,
                (i.minimum_quantity - i.quantity) AS shortfall
         FROM inventory i
-        JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = ?
+        LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = ?
         WHERE i.quantity < i.minimum_quantity
-        ORDER BY shortfall DESC, LOWER(pv.name)
+        ORDER BY shortfall DESC, LOWER(COALESCE(pv.name, i.barcode))
         """,
         (retailer_id,)
     ).fetchall()
