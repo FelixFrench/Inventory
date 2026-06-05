@@ -30,6 +30,8 @@ class SessionItem(BaseModel):
     brand: FieldStatus
     weight: FieldStatus
     price: FieldStatus
+    off_url: str
+    price_url: Optional[str]
 
 
 class SessionObject(BaseModel):

@@ -75,8 +75,9 @@ def get_price(barcode: str, name: str, brand: str, weight_g: float) -> dict | No
 
     Returns:
         {
-            "price_pence": int,
-            "price_type": str,  # "unit" or "per_kg"
+            "price_pence": int,        # e.g. 110
+            "price_type": str,         # "unit" or "per_kg"
+            "product_url": str | None  # e.g. "https://www.sainsburys.co.uk/gol-ui/product/..."
         }
         or None if no match found.
     """
@@ -112,7 +113,10 @@ def get_price(barcode: str, name: str, brand: str, weight_g: float) -> dict | No
                 continue
             if _ean_matches(barcode, product["eans"]):
                 logging.debug(f"Sainsbury's: found EAN match on page {page} for barcode {barcode}")
-                return _extract_price(product)
+                price = _extract_price(product)
+                if price is not None:
+                    price["product_url"] = product.get("full_url") or None
+                return price
 
         if page < _MAX_PAGES:
             time.sleep(_INTER_PAGE_SLEEP)

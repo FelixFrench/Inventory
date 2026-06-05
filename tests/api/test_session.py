@@ -13,7 +13,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
 CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, weight_g REAL, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
 CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
@@ -88,7 +88,7 @@ def _start_session(client, session_type="in"):
 
 def _seed_item(db, barcode, session_id, delta=1,
                info_status="pending", price_status="pending",
-               name=None, brand=None, weight_g=None, price_pence=None):
+               name=None, brand=None, weight_g=None, price_pence=None, product_url=None):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
     db.execute(
         "INSERT INTO session_items (session_id, barcode, delta, info_status, price_status, first_scanned_at) "
@@ -103,9 +103,9 @@ def _seed_item(db, barcode, session_id, delta=1,
         )
     if price_pence is not None:
         db.execute(
-            "INSERT OR IGNORE INTO prices (barcode, retailer_id, price_pence, price_type) "
-            "VALUES (?, ?, ?, 'unit')",
-            (barcode, _RETAILER_ID, price_pence)
+            "INSERT OR IGNORE INTO prices (barcode, retailer_id, price_pence, price_type, product_url) "
+            "VALUES (?, ?, ?, 'unit', ?)",
+            (barcode, _RETAILER_ID, price_pence, product_url)
         )
     db.commit()
 
@@ -553,3 +553,56 @@ def test_get_session_item_inventory_quantity_defaults_to_zero(client, db):
     assert resp.status_code == 200
     item = resp.json()["session"]["items"][0]
     assert item["inventory_quantity"] == 0
+
+
+# ---------------------------------------------------------------------------
+# off_url and price_url in GET /session items
+# ---------------------------------------------------------------------------
+
+_OFF_VIEW = "https://world.openfoodfacts.org/product/{}"
+_OFF_ADD  = "https://world.openfoodfacts.org/cgi/product.pl?type=edit&code={}"
+
+
+def test_get_session_item_off_url_view_when_resolved(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved",
+               name="Baked Beans", brand="Heinz", weight_g=415.0, price_pence=123)
+
+    resp = client.get("/session")
+    item = resp.json()["session"]["items"][0]
+    assert item["off_url"] == _OFF_VIEW.format(_BARCODE)
+
+
+def test_get_session_item_off_url_add_when_failed(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="failed", price_status="not_possible")
+
+    resp = client.get("/session")
+    item = resp.json()["session"]["items"][0]
+    assert item["off_url"] == _OFF_ADD.format(_BARCODE)
+
+
+def test_get_session_item_price_url_none_when_absent(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved",
+               name="Baked Beans", brand="Heinz", weight_g=415.0, price_pence=123)
+
+    resp = client.get("/session")
+    item = resp.json()["session"]["items"][0]
+    assert item["price_url"] is None
+
+
+def test_get_session_item_price_url_present_when_set(client, db):
+    session_id = _start_session(client, "in")
+    url = "https://www.sainsburys.co.uk/gol-ui/product/baked-beans"
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved",
+               name="Baked Beans", brand="Heinz", weight_g=415.0,
+               price_pence=123, product_url=url)
+
+    resp = client.get("/session")
+    item = resp.json()["session"]["items"][0]
+    assert item["price_url"] == url

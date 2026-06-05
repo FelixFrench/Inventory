@@ -22,7 +22,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
 CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, weight_g REAL, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
 CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
@@ -36,7 +36,8 @@ _BARCODE = "5014788110140"
 _RETAILER_ID = 1
 _SESSION_ID = 1
 _GOOD_OFF = {"name": "Baked Beans", "brand": "Heinz", "weight_g": 415.0}
-_GOOD_PRICE = {"price_pence": 85, "price_type": "unit"}
+_GOOD_PRICE = {"price_pence": 85, "price_type": "unit", "product_url": "https://www.sainsburys.co.uk/gol-ui/product/test"}
+_GOOD_PRICE_NO_URL = {"price_pence": 85, "price_type": "unit", "product_url": None}
 
 
 @pytest.fixture
@@ -417,3 +418,32 @@ def test_migration_discards_pending_lookups_rows():
         conn.close()
     finally:
         os.unlink(db_path)
+
+
+# ---------------------------------------------------------------------------
+# product_url written by phase2_success
+# ---------------------------------------------------------------------------
+
+def test_phase2_success_writes_product_url(db):
+    _seed(db)
+    with patch("src.worker.main.get_connection", _make_get_connection(db)):
+        _phase2_success(_BARCODE, _SESSION_ID, _RETAILER_ID, _GOOD_PRICE)
+
+    pr = db.execute(
+        "SELECT price_pence, product_url FROM prices WHERE barcode = ?", (_BARCODE,)
+    ).fetchone()
+    assert pr is not None
+    assert pr["price_pence"] == 85
+    assert pr["product_url"] == "https://www.sainsburys.co.uk/gol-ui/product/test"
+
+
+def test_phase2_success_writes_null_product_url_when_none(db):
+    _seed(db)
+    with patch("src.worker.main.get_connection", _make_get_connection(db)):
+        _phase2_success(_BARCODE, _SESSION_ID, _RETAILER_ID, _GOOD_PRICE_NO_URL)
+
+    pr = db.execute(
+        "SELECT product_url FROM prices WHERE barcode = ?", (_BARCODE,)
+    ).fetchone()
+    assert pr is not None
+    assert pr["product_url"] is None

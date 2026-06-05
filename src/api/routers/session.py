@@ -15,6 +15,7 @@ from src.api.models import (
     StartSessionRequest,
 )
 from src.api.routers.ws import manager
+from src.api.urls import off_url as build_off_url
 from src.db.db import get_connection
 
 router = APIRouter()
@@ -43,6 +44,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
                pv.brand,
                pv.weight_g,
                pr.price_pence,
+               pr.product_url,
                COALESCE(inv.quantity, 0) AS inventory_quantity
         FROM   session_items si
         LEFT   JOIN product_variants pv ON pv.barcode = si.barcode AND pv.retailer_id = ?
@@ -73,6 +75,8 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
             "brand": {"value": r['brand'], "status": info_s},
             "weight": {"value": weight_val, "status": info_s},
             "price": {"value": price_val, "status": price_s},
+            "off_url":   build_off_url(r['barcode'], info_status=r['info_status']),
+            "price_url": r['product_url'],
         })
 
     return SessionObject(

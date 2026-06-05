@@ -84,9 +84,9 @@ def _phase2_success(barcode: str, session_id: int, retailer_id: int, price: dict
     try:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
-            "INSERT OR REPLACE INTO prices (barcode, retailer_id, price_pence, price_type) "
-            "VALUES (?, ?, ?, ?)",
-            (barcode, retailer_id, price['price_pence'], price['price_type'])
+            "INSERT OR REPLACE INTO prices (barcode, retailer_id, price_pence, price_type, product_url) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (barcode, retailer_id, price['price_pence'], price['price_type'], price.get('product_url'))
         )
         r = conn.execute(
             "UPDATE session_items SET price_status = 'resolved' "

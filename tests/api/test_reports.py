@@ -12,7 +12,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
 CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, weight_g REAL, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL, started_at TEXT NOT NULL, recovered_at TEXT);
 CREATE TABLE session_items (session_id INTEGER NOT NULL, barcode TEXT NOT NULL, delta INTEGER NOT NULL, info_status TEXT NOT NULL DEFAULT 'pending', price_status TEXT NOT NULL DEFAULT 'pending', first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
@@ -66,7 +66,8 @@ def client_no_auth(db):
 
 
 def _seed_item(db, barcode: str, name: str, brand: str = None,
-               quantity: int = 0, minimum_quantity: int = 0, price_pence: int = None):
+               quantity: int = 0, minimum_quantity: int = 0, price_pence: int = None,
+               product_url: str = None):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
     db.execute(
         "INSERT INTO product_variants (barcode, retailer_id, name, brand) VALUES (?, ?, ?, ?)",
@@ -78,8 +79,8 @@ def _seed_item(db, barcode: str, name: str, brand: str = None,
     )
     if price_pence is not None:
         db.execute(
-            "INSERT INTO prices (barcode, retailer_id, price_pence, price_type) VALUES (?, ?, ?, 'unit')",
-            (barcode, _RETAILER_ID, price_pence)
+            "INSERT INTO prices (barcode, retailer_id, price_pence, price_type, product_url) VALUES (?, ?, ?, 'unit', ?)",
+            (barcode, _RETAILER_ID, price_pence, product_url)
         )
     db.commit()
 
@@ -268,10 +269,10 @@ def _seed_pv(db, barcode, name=None, brand=None, weight_g=None):
     db.commit()
 
 
-def _seed_price(db, barcode, price_pence=None, price_type='unit'):
+def _seed_price(db, barcode, price_pence=None, price_type='unit', product_url=None):
     db.execute(
-        "INSERT INTO prices (barcode, retailer_id, price_pence, price_type) VALUES (?, ?, ?, ?)",
-        (barcode, _RETAILER_ID, price_pence, price_type),
+        "INSERT INTO prices (barcode, retailer_id, price_pence, price_type, product_url) VALUES (?, ?, ?, ?, ?)",
+        (barcode, _RETAILER_ID, price_pence, price_type, product_url),
     )
     db.commit()
 
@@ -487,3 +488,96 @@ def test_unresolved_inventory_quantity_from_row(client, db):
     assert resp.status_code == 200
     item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
     assert item["inventory_quantity"] == 5
+
+
+# ---------------------------------------------------------------------------
+# off_url and price_url in inventory report
+# ---------------------------------------------------------------------------
+
+_OFF_VIEW = "https://world.openfoodfacts.org/product/{}"
+_OFF_ADD  = "https://world.openfoodfacts.org/cgi/product.pl?type=edit&code={}"
+
+
+def test_inventory_off_url_view_when_name_resolved(client, db):
+    bc = "7000000000001"
+    _seed_item(db, bc, "Oat Milk", quantity=1, price_pence=110)
+
+    resp = client.get("/reports/inventory")
+    item = resp.json()["items"][0]
+    assert item["off_url"] == _OFF_VIEW.format(bc)
+
+
+def test_inventory_off_url_view_when_name_is_barcode_fallback(client, db):
+    bc = "7000000000002"
+    _seed_off_failed_item(db, bc, quantity=1)
+
+    resp = client.get("/reports/inventory")
+    item = next(i for i in resp.json()["items"] if i["name"] == bc)
+    # COALESCE gives barcode as name — still non-None, so VIEW_URL
+    assert item["off_url"] == _OFF_VIEW.format(bc)
+
+
+def test_inventory_price_url_none_when_no_price_url(client, db):
+    bc = "7000000000003"
+    _seed_item(db, bc, "Butter", quantity=1, price_pence=150)
+
+    resp = client.get("/reports/inventory")
+    item = resp.json()["items"][0]
+    assert item["price_url"] is None
+
+
+def test_inventory_price_url_present_when_set(client, db):
+    bc = "7000000000004"
+    url = "https://www.sainsburys.co.uk/gol-ui/product/butter"
+    _seed_item(db, bc, "Butter", quantity=1, price_pence=150, product_url=url)
+
+    resp = client.get("/reports/inventory")
+    item = resp.json()["items"][0]
+    assert item["price_url"] == url
+
+
+# ---------------------------------------------------------------------------
+# off_url and price_url in unresolved report
+# ---------------------------------------------------------------------------
+
+def test_unresolved_off_url_add_when_no_pv_row(client, db):
+    bc = _BC(20)
+    _seed_barcode(db, bc)
+
+    resp = client.get("/reports/unresolved")
+    item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
+    # No product_variants row → name is None → ADD URL
+    assert item["off_url"] == _OFF_ADD.format(bc)
+
+
+def test_unresolved_off_url_view_when_name_present(client, db):
+    bc = _BC(21)
+    _seed_barcode(db, bc)
+    _seed_pv(db, bc, name="Milk", brand=None, weight_g=None)
+
+    resp = client.get("/reports/unresolved")
+    item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
+    assert item["off_url"] == _OFF_VIEW.format(bc)
+
+
+def test_unresolved_price_url_none_when_no_product_url(client, db):
+    bc = _BC(22)
+    _seed_barcode(db, bc)
+    _seed_pv(db, bc, name=None, brand=None, weight_g=None)
+    _seed_price(db, bc, price_pence=110)
+
+    resp = client.get("/reports/unresolved")
+    item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
+    assert item["price_url"] is None
+
+
+def test_unresolved_price_url_present_when_set(client, db):
+    bc = _BC(23)
+    _seed_barcode(db, bc)
+    _seed_pv(db, bc, name=None, brand=None, weight_g=None)
+    url = "https://www.sainsburys.co.uk/gol-ui/product/test"
+    _seed_price(db, bc, price_pence=110, product_url=url)
+
+    resp = client.get("/reports/unresolved")
+    item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
+    assert item["price_url"] == url
