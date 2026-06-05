@@ -1,5 +1,6 @@
 import logging
 import os
+import textwrap
 from datetime import datetime
 
 from escpos.printer import Dummy, Network
@@ -23,17 +24,6 @@ def _identifier(name: str | None, brand: str | None, barcode: str) -> str:
     base = name if name else barcode
     return f"{base} ({brand})" if brand else base
 
-
-def _wrap(text: str, width: int) -> list[str]:
-    if len(text) <= width:
-        return [text]
-    lines = []
-    while len(text) > width:
-        lines.append(text[:width - 1] + '-')
-        text = text[width - 1:]
-    if text:
-        lines.append(text)
-    return lines
 
 
 def _row(left: str, right: str, cols: int) -> str:
@@ -79,10 +69,10 @@ def _format_inventory(report_data: dict) -> bytes:
         price = f"£{item['price_pence'] / 100:.2f}" if item["price_pence"] is not None else "—"
         right = f"  {item['quantity']:>{QTY_WIDTH}}  {price:>{PRICE_WIDTH}}"
         id_width = COLS - len(right)
-        lines = _wrap(ident, id_width)
+        lines = textwrap.wrap(ident, id_width, subsequent_indent=' ')
         p.text(_row(lines[0], right, COLS) + "\n")
         for cont in lines[1:]:
-            p.text(" " + cont + "\n")
+            p.text(cont + "\n")
 
     p.text(divider + "\n")
 
@@ -137,11 +127,11 @@ def _format_low_stock(report_data: dict) -> bytes:
             f"  {item['shortfall']:>{SHORT_WIDTH}}"
         )
         id_width = COLS - len(right)
-        lines = _wrap(ident, id_width)
+        lines = textwrap.wrap(ident, id_width, subsequent_indent=' ')
         p.set(align="left")
         p.text(_row(lines[0], right, COLS) + "\n")
         for cont in lines[1:]:
-            p.text(" " + cont + "\n")
+            p.text(cont + "\n")
 
     p.text(divider + "\n")
     count = len(items)
