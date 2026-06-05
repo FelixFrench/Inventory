@@ -22,7 +22,7 @@ tr:hover td { background: #f9f9f9; }
 .brand { color: #666; font-size: 0.85rem; margin-top: 2px; }
 .muted { color: #aaa; }
 tfoot td { font-weight: 700; background: #f0f0f0; border-top: 2px solid #ddd; }
-.hidden { display: none; }
+.hidden { display: none !important; }
 
 /* Print button (report pages) */
 .report-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 0.5rem; }
