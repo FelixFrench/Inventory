@@ -145,6 +145,54 @@ def test_inventory_sorted_by_name(client, db):
     assert items[1]["name"] == "Zucchini"
 
 
+def _seed_off_failed_item(db, barcode: str, quantity: int):
+    """Insert a barcode+inventory row only — no product_variants, no prices."""
+    db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
+    db.execute(
+        "INSERT INTO inventory (barcode, quantity) VALUES (?, ?)",
+        (barcode, quantity)
+    )
+    db.commit()
+
+
+def test_inventory_off_failed_item_appears(client, db):
+    barcode = "5000000000099"
+    _seed_off_failed_item(db, barcode, quantity=2)
+
+    resp = client.get("/reports/inventory")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 1
+    item = data["items"][0]
+    assert item["name"] == barcode
+    assert item["brand"] is None
+    assert item["price_pence"] is None
+    assert item["line_total_pence"] is None
+
+
+def test_inventory_off_failed_item_contributes_zero_to_total(client, db):
+    _seed_off_failed_item(db, "5000000000098", quantity=5)
+
+    resp = client.get("/reports/inventory")
+    assert resp.status_code == 200
+    assert resp.json()["total_value_pence"] == 0
+
+
+def test_inventory_mixed_resolved_and_failed(client, db):
+    failed_barcode = "5000000000097"
+    _seed_item(db, "5000000000096", "Cheddar", brand="Cathedral City", quantity=1, price_pence=300)
+    _seed_off_failed_item(db, failed_barcode, quantity=2)
+
+    resp = client.get("/reports/inventory")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 2
+    names = {item["name"] for item in data["items"]}
+    assert "Cheddar" in names
+    assert failed_barcode in names
+    assert data["total_value_pence"] == 300
+
+
 # ---------------------------------------------------------------------------
 # GET /reports/low-stock
 # ---------------------------------------------------------------------------
