@@ -57,3 +57,48 @@ function render(data) {
     err.classList.remove('hidden');
   }
 })();
+
+let _activeToast = null;
+
+function showToast(message, type) {
+    if (_activeToast) {
+        _activeToast.remove();
+        _activeToast = null;
+    }
+    const toast = document.createElement('div');
+    toast.className = `toast toast--${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    _activeToast = toast;
+    setTimeout(() => {
+        toast.remove();
+        if (_activeToast === toast) _activeToast = null;
+    }, 4000);
+}
+
+document.getElementById('print-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('print-btn');
+    const report = btn.dataset.report;
+
+    btn.disabled = true;
+
+    try {
+        const res = await fetch(`/print/${report}`, {
+            method: 'POST',
+            headers: { 'X-API-Key': API_KEY }
+        });
+        if (res.ok) {
+            showToast('Sent to printer ✓', 'ok');
+        } else {
+            const body = await res.json().catch(() => ({}));
+            const msg = body.error === 'printer_not_configured'
+                ? 'Printer not configured'
+                : 'Printer unavailable';
+            showToast(msg, 'error');
+        }
+    } catch {
+        showToast('Printer unavailable', 'error');
+    } finally {
+        btn.disabled = false;
+    }
+});
