@@ -82,7 +82,7 @@ def _format_inventory(report_data: dict) -> bytes:
         lines = _wrap(ident, id_width)
         p.text(_row(lines[0], right, COLS) + "\n")
         for cont in lines[1:]:
-            p.text(cont + "\n")
+            p.text(" " + cont + "\n")
 
     p.text(divider + "\n")
 
@@ -141,7 +141,7 @@ def _format_low_stock(report_data: dict) -> bytes:
         p.set(align="left")
         p.text(_row(lines[0], right, COLS) + "\n")
         for cont in lines[1:]:
-            p.text(cont + "\n")
+            p.text(" " + cont + "\n")
 
     p.text(divider + "\n")
     count = len(items)
