@@ -59,8 +59,10 @@ def _format_inventory(report_data: dict) -> bytes:
     p.text(_row("Product", header_right, COLS) + "\n")
     p.text(divider + "\n")
 
+    items = [item for item in report_data["items"] if item["quantity"] > 0]
+
     items = sorted(
-        report_data["items"],
+        items,
         key=lambda it: _identifier(it["name"], it["brand"], "").lower()
     )
 
