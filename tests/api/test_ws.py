@@ -15,7 +15,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
 CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, weight_g REAL, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
 CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
@@ -99,7 +99,7 @@ def _create_session(db, session_type="in") -> int:
     return db.execute("SELECT id FROM sessions ORDER BY id DESC LIMIT 1").fetchone()["id"]
 
 
-def _make_row(barcode, info_status, price_status, session_delta=1):
+def _make_row(barcode, info_status, price_status, session_delta=1, product_url=None):
     """Plain dict acting as a poll-query result row."""
     return {
         "barcode": barcode,
@@ -110,6 +110,7 @@ def _make_row(barcode, info_status, price_status, session_delta=1):
         "brand": "Test Brand",
         "weight_g": 400.0,
         "price_pence": 100,
+        "product_url": product_url,
     }
 
 
@@ -296,3 +297,67 @@ def test_scan_broadcast_inventory_quantity_zero_for_unknown(client, db):
         msg = ws.receive_json()
 
     assert msg["inventory_quantity"] == 0
+
+
+# ── off_url and price_url in WS payloads ────────────────────────────────────
+
+_OFF_VIEW = "https://world.openfoodfacts.org/product/{}"
+_OFF_ADD  = "https://world.openfoodfacts.org/cgi/product.pl?type=edit&code={}"
+
+
+def test_build_payload_off_url_view_when_resolved():
+    row = _make_row(_BARCODE, "resolved", "resolved")
+    payload = build_payload("resolution", row)
+    assert payload["off_url"] == _OFF_VIEW.format(_BARCODE)
+
+
+def test_build_payload_off_url_add_when_failed():
+    row = _make_row(_BARCODE, "failed", "not_possible")
+    payload = build_payload("resolution", row)
+    assert payload["off_url"] == _OFF_ADD.format(_BARCODE)
+
+
+def test_build_payload_price_url_none_when_absent():
+    row = _make_row(_BARCODE, "resolved", "resolved", product_url=None)
+    payload = build_payload("scan", row)
+    assert payload["price_url"] is None
+
+
+def test_build_payload_price_url_present_when_set():
+    url = "https://www.sainsburys.co.uk/gol-ui/product/test"
+    row = _make_row(_BARCODE, "resolved", "resolved", product_url=url)
+    payload = build_payload("scan", row)
+    assert payload["price_url"] == url
+
+
+def test_scan_broadcast_includes_off_url(client, db):
+    _create_session(db)
+    db.execute("INSERT INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
+    db.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name) VALUES (?, ?, 'Beans')",
+        (_BARCODE, _RETAILER_ID),
+    )
+    db.commit()
+
+    with client.websocket_connect("/ws") as ws:
+        client.post("/scan", json={"barcode": _BARCODE})
+        msg = ws.receive_json()
+
+    assert "off_url" in msg
+    assert msg["off_url"] == _OFF_VIEW.format(_BARCODE)
+
+
+def test_scan_broadcast_price_url_none_when_no_product_url(client, db):
+    _create_session(db)
+    db.execute("INSERT INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
+    db.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name) VALUES (?, ?, 'Beans')",
+        (_BARCODE, _RETAILER_ID),
+    )
+    db.commit()
+
+    with client.websocket_connect("/ws") as ws:
+        client.post("/scan", json={"barcode": _BARCODE})
+        msg = ws.receive_json()
+
+    assert msg["price_url"] is None

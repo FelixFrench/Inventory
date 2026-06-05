@@ -34,7 +34,8 @@ SELECT si.barcode,
        pv.name,
        pv.brand,
        pv.weight_g,
-       pr.price_pence
+       pr.price_pence,
+       pr.product_url
 FROM   session_items si
 LEFT   JOIN product_variants pv
            ON pv.barcode = si.barcode AND pv.retailer_id = ?

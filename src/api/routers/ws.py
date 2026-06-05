@@ -1,5 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from src.api.urls import off_url as build_off_url
+
 router = APIRouter()
 
 
@@ -85,4 +87,6 @@ def build_payload(type_: str, row) -> dict:
         "weight": {"value": weight_val, "status": info_wire},
         "price":  {"value": price_val,  "status": price_wire},
         "session_delta": row["session_delta"],
+        "off_url":   build_off_url(row["barcode"], info_status=row["info_status"]),
+        "price_url": row["product_url"],
     }

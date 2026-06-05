@@ -37,6 +37,7 @@ CREATE TABLE prices (
     price_pence INTEGER,
     price_type  TEXT NOT NULL DEFAULT 'unit'
                     CHECK(price_type IN ('unit', 'per_kg')),
+    product_url TEXT NULL,
     PRIMARY KEY (barcode, retailer_id)
 );
 

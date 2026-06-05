@@ -12,16 +12,24 @@ function render(data) {
   if (data.items.length === 0) {
     el.innerHTML = '<p class="empty">No items in inventory yet.</p>';
   } else {
-    const rows = data.items.map(item => `
+    const rows = data.items.map(item => {
+      const nameText = item.name || item.barcode;
+      const nameHtml = `<a href="${esc(item.off_url)}" target="_blank" rel="noopener noreferrer">${esc(nameText)}</a>`;
+      const priceText = pence(item.price_pence);
+      const priceHtml = item.price_url
+        ? `<a href="${esc(item.price_url)}" target="_blank" rel="noopener noreferrer">${priceText}</a>`
+        : priceText;
+      return `
           <tr>
             <td>
-              <div>${esc(item.name) || '—'}</div>
+              <div>${nameHtml}</div>
               ${item.brand ? '<div class="brand">' + esc(item.brand) + '</div>' : ''}
             </td>
             <td>${item.quantity}</td>
-            <td>${pence(item.price_pence)}</td>
+            <td>${priceHtml}</td>
             <td>${pence(item.line_total_pence)}</td>
-          </tr>`).join('');
+          </tr>`;
+    }).join('');
     el.innerHTML = `
           <table>
             <thead>

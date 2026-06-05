@@ -73,12 +73,16 @@ function makeRowHTML(barcode) {
     const r = rows[barcode];
     const deltaClass = sessionType === 'out' ? 'feed-delta-out' : 'feed-delta-in';
     const deltaSign  = sessionType === 'out' ? '−' : '+';
-    const meta = [renderField(r.brand), renderField(r.weight), renderPrice(r.price)].join(' · ');
 
     const decDisabled = r.session_delta === 0 ? ' disabled' : '';
+    const nameLink = `<a href="${esc(r.off_url)}" target="_blank" rel="noopener noreferrer" class="feed-item-name">${renderField(r.name)}</a>`;
+    const priceHtml = r.price_url
+        ? `<a href="${esc(r.price_url)}" target="_blank" rel="noopener noreferrer">${renderPrice(r.price)}</a>`
+        : renderPrice(r.price);
+    const meta = [renderField(r.brand), renderField(r.weight), priceHtml].join(' · ');
     return `
       <div class="feed-row-top">
-        <span class="feed-item-name">${renderField(r.name)}</span>
+        ${nameLink}
         <div class="feed-row-right">
           <span class="${deltaClass}">${deltaSign}${r.session_delta}</span>
           <span class="feed-item-stock">${r.inventory_quantity ?? 0} in stock</span>
@@ -193,6 +197,8 @@ function _storeRow(barcode, msg) {
         session_delta: msg.session_delta,
         name: msg.name, brand: msg.brand,
         weight: msg.weight, price: msg.price,
+        off_url: msg.off_url,
+        price_url: msg.price_url,
     };
 }
 
@@ -295,6 +301,8 @@ function renderActiveSession(session) {
             inventory_quantity: item.inventory_quantity ?? 0,
             name: item.name, brand: item.brand,
             weight: item.weight, price: item.price,
+            off_url: item.off_url,
+            price_url: item.price_url,
         };
         addRowToFeed(item.barcode);
     }

@@ -49,10 +49,15 @@ function renderTable(items) {
   for (const item of items) {
     const tr = document.createElement('tr');
 
-    // Barcode — always plain text
+    // Barcode — link to OFF page
     const tdBarcode = document.createElement('td');
     tdBarcode.className = 'barcode-fallback';
-    tdBarcode.textContent = item.barcode;
+    const barcodeLink = document.createElement('a');
+    barcodeLink.href = item.off_url;
+    barcodeLink.target = '_blank';
+    barcodeLink.rel = 'noopener noreferrer';
+    barcodeLink.textContent = item.barcode;
+    tdBarcode.appendChild(barcodeLink);
     tr.appendChild(tdBarcode);
 
     // Name — value or badge, same as Brand/Weight
@@ -74,7 +79,17 @@ function renderTable(items) {
 
     // Price
     const tdPrice = document.createElement('td');
-    tdPrice.appendChild(renderPrice(item.price));
+    const priceEl = renderPrice(item.price);
+    if (item.price_url) {
+      const priceLink = document.createElement('a');
+      priceLink.href = item.price_url;
+      priceLink.target = '_blank';
+      priceLink.rel = 'noopener noreferrer';
+      priceLink.appendChild(priceEl);
+      tdPrice.appendChild(priceLink);
+    } else {
+      tdPrice.appendChild(priceEl);
+    }
     tr.appendChild(tdPrice);
 
     // In Stock

@@ -6,8 +6,8 @@ from src.worker.sainsburys import get_price, _build_query, _ean_matches, _extrac
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_product(eans, retail_price, unit_price=None):
-    return {
+def make_product(eans, retail_price, unit_price=None, full_url=None):
+    p = {
         "product_uid": "123456",
         "name": "Test Product 400g",
         "eans": eans,
@@ -15,6 +15,9 @@ def make_product(eans, retail_price, unit_price=None):
         "unit_price": unit_price or {"price": 2.75, "measure": "kg", "measure_amount": 1},
         "is_available": True,
     }
+    if full_url is not None:
+        p["full_url"] = full_url
+    return p
 
 
 def make_response(products):
@@ -176,7 +179,7 @@ class TestGetPrice:
     def test_ean_match_on_page_1_returns_price(self, mock_get, mock_sleep):
         mock_get.side_effect = [make_response([_MATCH])]
         result = self._call()
-        assert result == {"price_pence": 110, "price_type": "unit"}
+        assert result == {"price_pence": 110, "price_type": "unit", "product_url": None}
         assert mock_get.call_count == 1
 
     @patch("src.worker.sainsburys.time.sleep")
@@ -184,7 +187,7 @@ class TestGetPrice:
     def test_ean_match_on_page_2_returns_price(self, mock_get, mock_sleep):
         mock_get.side_effect = [make_response([_NON_MATCH]), make_response([_MATCH])]
         result = self._call()
-        assert result == {"price_pence": 110, "price_type": "unit"}
+        assert result == {"price_pence": 110, "price_type": "unit", "product_url": None}
         assert mock_get.call_count == 2
         assert mock_sleep.call_count == 1
 
@@ -197,7 +200,7 @@ class TestGetPrice:
             make_response([_MATCH]),
         ]
         result = self._call()
-        assert result == {"price_pence": 110, "price_type": "unit"}
+        assert result == {"price_pence": 110, "price_type": "unit", "product_url": None}
         assert mock_get.call_count == 3
         assert mock_sleep.call_count == 2
 
@@ -221,7 +224,7 @@ class TestGetPrice:
             make_response([_MATCH]),
         ]
         result = self._call()
-        assert result == {"price_pence": 110, "price_type": "unit"}
+        assert result == {"price_pence": 110, "price_type": "unit", "product_url": None}
         assert mock_get.call_count == 3
 
     @patch("src.worker.sainsburys.time.sleep")
@@ -255,7 +258,7 @@ class TestGetPrice:
         }
         mock_get.side_effect = [make_response([no_eans_product, _MATCH])]
         result = self._call()
-        assert result == {"price_pence": 110, "price_type": "unit"}
+        assert result == {"price_pence": 110, "price_type": "unit", "product_url": None}
 
     @patch("src.worker.sainsburys.time.sleep")
     @patch("src.worker.sainsburys.requests.get")
@@ -266,7 +269,7 @@ class TestGetPrice:
             unit_price={"price": 2.75, "measure": "kg", "measure_amount": 1},
         )
         mock_get.side_effect = [make_response([per_kg])]
-        assert self._call() == {"price_pence": 275, "price_type": "per_kg"}
+        assert self._call() == {"price_pence": 275, "price_type": "per_kg", "product_url": None}
 
     @patch("src.worker.sainsburys.time.sleep")
     @patch("src.worker.sainsburys.requests.get")
@@ -307,4 +310,29 @@ class TestGetPrice:
     def test_none_weight_does_not_raise(self, mock_get, mock_sleep):
         mock_get.side_effect = [make_response([_MATCH])]
         result = get_price(BARCODE, NAME, BRAND, None)
-        assert result == {"price_pence": 110, "price_type": "unit"}
+        assert result == {"price_pence": 110, "price_type": "unit", "product_url": None}
+
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
+    def test_full_url_present_is_returned_as_product_url(self, mock_get, mock_sleep):
+        url = "https://www.sainsburys.co.uk/gol-ui/product/test-beans"
+        match_with_url = make_product(
+            eans=[BARCODE],
+            retail_price={"price": 1.10, "measure": "unit"},
+            full_url=url,
+        )
+        mock_get.side_effect = [make_response([match_with_url])]
+        result = self._call()
+        assert result["product_url"] == url
+
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
+    def test_empty_full_url_becomes_none(self, mock_get, mock_sleep):
+        match_with_empty_url = make_product(
+            eans=[BARCODE],
+            retail_price={"price": 1.10, "measure": "unit"},
+            full_url="",
+        )
+        mock_get.side_effect = [make_response([match_with_empty_url])]
+        result = self._call()
+        assert result["product_url"] is None

@@ -1,3 +1,6 @@
+from src.api.urls import off_url as build_off_url
+
+
 def format_weight(weight_g) -> str | None:
     if weight_g is None:
         return None
@@ -48,6 +51,7 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
             pr.barcode                  AS pr_barcode,
             pr.price_pence,
             pr.price_type,
+            pr.product_url,
             si.barcode                  AS si_barcode,
             si.info_status,
             si.price_status
@@ -101,6 +105,8 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
             "brand":  {"value": row['brand'],                 "label": brand_label},
             "weight": {"value": format_weight(row['weight_g']), "label": weight_label},
             "price":  {"value": price_value,                  "label": price_label},
+            "off_url":   build_off_url(row['barcode'], name=row['name']),
+            "price_url": row['product_url'],
         })
 
     return {"items": items, "total_count": len(items)}
@@ -109,7 +115,8 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
 def get_inventory_report(db, retailer_id: int) -> dict:
     rows = db.execute(
         """
-        SELECT COALESCE(pv.name, i.barcode) AS name, pv.brand, i.quantity, p.price_pence
+        SELECT i.barcode, COALESCE(pv.name, i.barcode) AS name, pv.brand, i.quantity,
+               p.price_pence, p.product_url
         FROM inventory i
         LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = ?
         LEFT JOIN prices p ON p.barcode = i.barcode AND p.retailer_id = ?
@@ -130,6 +137,8 @@ def get_inventory_report(db, retailer_id: int) -> dict:
             "quantity": r["quantity"],
             "price_pence": r["price_pence"],
             "line_total_pence": line,
+            "off_url":   build_off_url(r["barcode"], name=r["name"]),
+            "price_url": r["product_url"],
         })
     return {"items": items, "total_value_pence": total}
 
