@@ -8,7 +8,6 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 from fastapi import Depends, FastAPI, HTTPException, Response
-from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -93,9 +92,17 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:"
-        )
+        if request.url.path == "/docs":
+            csp = (
+                "default-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; "
+            )
+        else:
+            csp = (
+                "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:"
+            )
+        response.headers["Content-Security-Policy"] = csp
         return response
 
 
@@ -185,12 +192,20 @@ async def docs_login(body: DocsLoginRequest, response: Response) -> dict:
 @app.get("/docs", response_class=HTMLResponse, include_in_schema=False)
 async def get_swagger_docs(_: None = Depends(verify_docs_access)):
     """Serve the Swagger UI. Requires a valid X-API-Key header or docs session cookie."""
-    return get_swagger_ui_html(
-        openapi_url="/openapi.json",
-        title=app.title,
-        swagger_js_url="/swagger-ui/swagger-ui-bundle.js",
-        swagger_css_url="/swagger-ui/swagger-ui.css",
-    )
+    return """<!DOCTYPE html>
+<html>
+  <head>
+    <title>Inventory API</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="/swagger-ui/swagger-ui.css">
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="/swagger-ui/swagger-ui-bundle.js"></script>
+    <script src="/swagger-ui/swagger-init.js"></script>
+  </body>
+</html>"""
 
 
 @app.get("/openapi.json", include_in_schema=False)
