@@ -13,9 +13,9 @@ router = APIRouter(prefix="/print", tags=["Print"])
 
 
 @router.post("/inventory")
-def post_print_inventory(request: Request, db=Depends(get_db)) -> dict:
+def post_print_inventory(request: Request, db=Depends(get_db)) -> dict | JSONResponse:
     """
-    Print the full inventory report to the configured label printer.
+    Print the full inventory report to the configured receipt printer.
 
     Returns `{printed: true}` on success. Returns 503 if the printer is not
     configured or is unreachable.
@@ -31,9 +31,9 @@ def post_print_inventory(request: Request, db=Depends(get_db)) -> dict:
 
 
 @router.post("/low-stock")
-def post_print_low_stock(request: Request, db=Depends(get_db)) -> dict:
+def post_print_low_stock(request: Request, db=Depends(get_db)) -> dict | JSONResponse:
     """
-    Print the low-stock report to the configured label printer.
+    Print the low-stock report to the configured receipt printer.
 
     Returns `{printed: true}` on success. Returns 503 if the printer is not
     configured or is unreachable.

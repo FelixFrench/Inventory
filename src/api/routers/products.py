@@ -64,7 +64,7 @@ def set_minimum_quantity(
     body: SetMinimumQuantityRequest,
     request: Request,
     db: sqlite3.Connection = Depends(get_db),
-) -> dict:
+) -> dict | JSONResponse:
     """
     Set the minimum quantity threshold for a product.
 
