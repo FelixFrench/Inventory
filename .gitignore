@@ -18,3 +18,4 @@ config.local.env
 frontend/config.js
 .coverage
 uvicorn.log
+frontend/swagger-ui/

@@ -18,7 +18,7 @@ from src.api.routers.ws import manager
 from src.api.urls import off_url as build_off_url
 from src.db.db import get_connection
 
-router = APIRouter()
+router = APIRouter(tags=["Session"])
 
 _503 = HTTPException(
     status_code=503,
@@ -90,7 +90,14 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
 
 
 @router.post("/session", status_code=201)
-def start_session(body: StartSessionRequest, retailer_id: int = Depends(get_retailer_id)):
+def start_session(body: StartSessionRequest, retailer_id: int = Depends(get_retailer_id)) -> dict:
+    """
+    Start a new scanning session of type 'in' (stock intake) or 'out' (stock removal).
+
+    Returns the newly created session object. Returns 409 if a session is already
+    active, including the existing session in the response body. Only one session may
+    be active at a time.
+    """
     try:
         conn = get_connection()
         try:
@@ -130,7 +137,14 @@ def start_session(body: StartSessionRequest, retailer_id: int = Depends(get_reta
 
 
 @router.get("/session", response_model=SessionResponse)
-def get_session(retailer_id: int = Depends(get_retailer_id)):
+def get_session(retailer_id: int = Depends(get_retailer_id)) -> SessionResponse:
+    """
+    Retrieve the current active session with all scanned items.
+
+    Returns the session object including per-item info and price statuses translated
+    to wire values (pending→loading, not_possible→failed). Returns `{session: null}`
+    if no session is active.
+    """
     try:
         conn = get_connection()
         try:
@@ -148,7 +162,15 @@ def get_session(retailer_id: int = Depends(get_retailer_id)):
 
 
 @router.post("/session/confirm", response_model=ConfirmResponse)
-def confirm_session(retailer_id: int = Depends(get_retailer_id)):
+def confirm_session(retailer_id: int = Depends(get_retailer_id)) -> ConfirmResponse:
+    """
+    Finalise the active session and apply all deltas to inventory.
+
+    Validates that no product info or price lookups are still pending. For 'out'
+    sessions, also checks that no item would go below zero quantity. On success,
+    applies inventory changes and deletes the session. Returns 409 if there is no
+    active session, if lookups are still pending, or if any item would go negative.
+    """
     try:
         conn = get_connection()
         try:
@@ -246,7 +268,13 @@ def confirm_session(retailer_id: int = Depends(get_retailer_id)):
 
 
 @router.post("/session/discard", response_model=DiscardResponse)
-def discard_session():
+def discard_session() -> DiscardResponse:
+    """
+    Discard the active session without applying any inventory changes.
+
+    Deletes the session and all its scanned items. Returns 409 if no session is
+    currently active.
+    """
     try:
         conn = get_connection()
         try:
@@ -300,7 +328,14 @@ def _do_put_delta(barcode: str, new_delta: int) -> dict | None:
 
 
 @router.put("/session/items/{barcode}")
-async def put_session_item_delta(barcode: str, body: DeltaUpdateRequest):
+async def put_session_item_delta(barcode: str, body: DeltaUpdateRequest) -> dict:
+    """
+    Update the delta for a specific item in the active session.
+
+    Sets the item's session delta to the supplied value and broadcasts a WebSocket
+    update to all connected clients. Returns 400 if the delta is negative, 404 if the
+    barcode is not in the current session, 409 if no session is active.
+    """
     if body.delta < 0:
         raise HTTPException(status_code=400, detail={"error": "invalid_delta"})
     try:

@@ -8,7 +8,8 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 from fastapi import Depends, FastAPI
-from fastapi.responses import RedirectResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -139,7 +140,14 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan,
+    title="Inventory API",
+    version="1.1.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(scan.router,    dependencies=[Depends(verify_api_key)])
 app.include_router(session.router, dependencies=[Depends(verify_api_key)])
@@ -152,6 +160,23 @@ app.include_router(ws_router)
 @app.get("/")
 async def root():
     return RedirectResponse(url="/feed.html")
+
+
+@app.get("/docs", response_class=HTMLResponse, include_in_schema=False)
+async def get_swagger_docs(api_key: str = Depends(verify_api_key)):
+    """Serve the Swagger UI. Requires a valid X-API-Key header."""
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title=app.title,
+        swagger_js_url="/swagger-ui/swagger-ui-bundle.js",
+        swagger_css_url="/swagger-ui/swagger-ui.css",
+    )
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def get_openapi_schema():
+    """Serve the OpenAPI schema JSON."""
+    return JSONResponse(app.openapi())
 
 
 # Must remain after all include_router() calls — FastAPI matches routes in

@@ -2,7 +2,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.api.urls import off_url as build_off_url
 
-router = APIRouter()
+router = APIRouter(tags=["WebSocket"])
 
 
 class ConnectionManager:
@@ -35,6 +35,13 @@ manager = ConnectionManager()
 
 @router.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
+    """
+    Persistent WebSocket connection for real-time session updates.
+
+    Pushes JSON messages of type 'scan' (new barcode scanned), 'resolution'
+    (product info or price lookup completed), and 'delta_update' (item delta
+    manually adjusted). The connection is kept open until the client disconnects.
+    """
     await manager.connect(websocket)
     try:
         while True:

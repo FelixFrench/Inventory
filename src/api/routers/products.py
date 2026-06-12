@@ -9,11 +9,17 @@ from src.api.models import SetMinimumQuantityRequest
 from src.api.reports import format_weight
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["Products"])
 
 
 @router.get("/products/minimum-quantities")
-def get_minimum_quantities(request: Request, db: sqlite3.Connection = Depends(get_db)):
+def get_minimum_quantities(request: Request, db: sqlite3.Connection = Depends(get_db)) -> dict:
+    """
+    List all inventory items with their current and minimum quantities.
+
+    Returns product name, brand, weight, current stock, and minimum stock threshold
+    for every item in inventory, ordered alphabetically by name.
+    """
     try:
         retailer_id = request.app.state.sainsburys_retailer_id
         rows = db.execute(
@@ -58,7 +64,14 @@ def set_minimum_quantity(
     body: SetMinimumQuantityRequest,
     request: Request,
     db: sqlite3.Connection = Depends(get_db),
-):
+) -> dict:
+    """
+    Set the minimum quantity threshold for a product.
+
+    Updates the restock alert level for the given barcode. Returns 400 if the
+    supplied minimum_quantity is negative, 404 if the barcode does not exist in
+    inventory.
+    """
     if body.minimum_quantity < 0:
         return JSONResponse(status_code=400, content={"error": "invalid_minimum_quantity"})
     try:
