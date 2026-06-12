@@ -62,3 +62,7 @@ class DeltaUpdateRequest(BaseModel):
 
 class SetMinimumQuantityRequest(BaseModel):
     minimum_quantity: int
+
+
+class DocsLoginRequest(BaseModel):
+    api_key: str

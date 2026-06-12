@@ -7,13 +7,15 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.api.dependencies import verify_api_key
+import src.api.dependencies as _api_deps
+from src.api.dependencies import verify_api_key, verify_docs_access
+from src.api.models import DocsLoginRequest
 from src.api.routers import printing as print_router
 from src.api.routers import products, reports, scan, session
 from src.api.routers.ws import build_payload, manager
@@ -162,9 +164,27 @@ async def root():
     return RedirectResponse(url="/feed.html")
 
 
+@app.post("/docs-login", include_in_schema=False)
+async def docs_login(body: DocsLoginRequest, response: Response) -> dict:
+    """Exchange a valid API key for a short-lived docs session cookie."""
+    if _api_deps._API_KEY is None:
+        raise HTTPException(status_code=500, detail="Server misconfigured")
+    if body.api_key != _api_deps._API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    response.set_cookie(
+        key="docs_session",
+        value=body.api_key,
+        httponly=True,
+        samesite="strict",
+        max_age=28800,
+        path="/docs",
+    )
+    return {"ok": True}
+
+
 @app.get("/docs", response_class=HTMLResponse, include_in_schema=False)
-async def get_swagger_docs(api_key: str = Depends(verify_api_key)):
-    """Serve the Swagger UI. Requires a valid X-API-Key header."""
+async def get_swagger_docs(_: None = Depends(verify_docs_access)):
+    """Serve the Swagger UI. Requires a valid X-API-Key header or docs session cookie."""
     return get_swagger_ui_html(
         openapi_url="/openapi.json",
         title=app.title,
