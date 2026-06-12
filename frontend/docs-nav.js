@@ -10,3 +10,8 @@ async function openDocs() {
         alert('Could not open docs: check API key in config.js');
     }
 }
+
+document.getElementById('docs-link').addEventListener('click', function(e) {
+    e.preventDefault();
+    openDocs();
+});
