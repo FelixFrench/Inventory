@@ -6,17 +6,10 @@ from fastapi.responses import JSONResponse
 
 from src.api.dependencies import get_db
 from src.api.models import SetMinimumQuantityRequest
+from src.api.reports import format_weight
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _format_weight(weight_g) -> str | None:
-    if weight_g is None:
-        return None
-    if weight_g >= 1000:
-        return f"{weight_g / 1000:.1f}kg"
-    return f"{round(weight_g)}g"
 
 
 @router.get("/products/minimum-quantities")
@@ -45,7 +38,7 @@ def get_minimum_quantities(request: Request, db: sqlite3.Connection = Depends(ge
                 "barcode": row["barcode"],
                 "name": row["name"],
                 "brand": row["brand"],
-                "weight": _format_weight(row["weight_g"]),
+                "weight": format_weight(row["weight_g"]),
                 "current_quantity": row["current_quantity"],
                 "minimum_quantity": row["minimum_quantity"],
             }
