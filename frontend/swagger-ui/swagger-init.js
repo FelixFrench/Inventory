@@ -4,9 +4,7 @@ window.onload = function () {
         dom_id: '#swagger-ui',
         presets: [
             SwaggerUIBundle.presets.apis,
-            SwaggerUIBundle.SwaggerUIStandalonePreset,
         ],
-        layout: 'StandaloneLayout',
         deepLinking: true,
     });
 };
