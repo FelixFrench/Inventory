@@ -58,7 +58,7 @@ def get_minimum_quantities(request: Request, db: sqlite3.Connection = Depends(ge
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.put("/products/{barcode}/minimum_quantity")
+@router.put("/products/{barcode}/minimum_quantity", response_model=None)
 def set_minimum_quantity(
     barcode: str,
     body: SetMinimumQuantityRequest,

@@ -10,6 +10,7 @@ from src.api.models import (
     ConfirmResponse,
     DeltaUpdateRequest,
     DiscardResponse,
+    SessionItem,
     SessionObject,
     SessionResponse,
     StartSessionRequest,
@@ -85,7 +86,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
         started_at=session_row['started_at'],
         recovered_at=session_row['recovered_at'],
         total_delta=total_delta,
-        items=items,
+        items=[SessionItem(**item) for item in items],
     )
 
 

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/print", tags=["Print"])
 
 
-@router.post("/inventory")
+@router.post("/inventory", response_model=None)
 def post_print_inventory(request: Request, db=Depends(get_db)) -> dict | JSONResponse:
     """
     Print the full inventory report to the configured receipt printer.
@@ -30,7 +30,7 @@ def post_print_inventory(request: Request, db=Depends(get_db)) -> dict | JSONRes
     return {"printed": True}
 
 
-@router.post("/low-stock")
+@router.post("/low-stock", response_model=None)
 def post_print_low_stock(request: Request, db=Depends(get_db)) -> dict | JSONResponse:
     """
     Print the low-stock report to the configured receipt printer.
