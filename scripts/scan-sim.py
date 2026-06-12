@@ -71,16 +71,17 @@ def send_scan(url: str, barcode: str, api_key: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Simulate barcode scans against the inventory API.")
-    parser.add_argument(
-        "--url",
-        default="http://localhost:8000/scan",
-        help="Scan endpoint URL (default: http://localhost:8000/scan)",
-    )
-    args = parser.parse_args()
+    # parser = argparse.ArgumentParser(description="Simulate barcode scans against the inventory API.")
+    # parser.add_argument(
+    #     "--url",
+    #     default="http://localhost:8000/scan",
+    #     help="Scan endpoint URL (default: http://localhost:8000/scan)",
+    # )
+    # args = parser.parse_args()
+    url = "http://127.0.0.1:8000/scan"
 
     api_key = load_api_key()
-    print(f"Scan simulator → {args.url}")
+    print(f"Scan simulator → {url}")#args.url}")
     print("Enter a barcode and press Enter. Ctrl+C to quit.\n")
 
     while True:
@@ -95,7 +96,8 @@ def main() -> None:
         if not barcode:
             continue
 
-        send_scan(args.url, barcode, api_key)
+        #send_scan(args.url, barcode, api_key)
+        send_scan(url, barcode, api_key)
 
 
 if __name__ == "__main__":
