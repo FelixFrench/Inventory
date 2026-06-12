@@ -52,7 +52,6 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
             pr.price_pence,
             pr.price_type,
             pr.product_url,
-            si.barcode                  AS si_barcode,
             si.info_status,
             si.price_status
         FROM barcodes b
@@ -100,7 +99,6 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
         items.append({
             "barcode":            row['barcode'],
             "inventory_quantity": row['inventory_quantity'],
-            "in_active_session":  row['si_barcode'] is not None,
             "name":   {"value": row['name'],                  "label": name_label},
             "brand":  {"value": row['brand'],                 "label": brand_label},
             "weight": {"value": format_weight(row['weight_g']), "label": weight_label},

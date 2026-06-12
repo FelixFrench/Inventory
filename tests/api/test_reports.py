@@ -400,7 +400,6 @@ def test_unresolved_session_pending(client, db):
     assert item["brand"]["label"] == "pending"
     assert item["weight"]["label"] == "pending"
     assert item["price"]["label"] == "pending"
-    assert item["in_active_session"] is True
 
 
 def test_unresolved_session_failed_not_possible(client, db):
