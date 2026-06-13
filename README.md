@@ -156,7 +156,8 @@ Inventory/
 │   │       └── reports.py      # GET /reports/inventory, GET /reports/low-stock
 │   ├── db/
 │   │   ├── db.py               # get_connection(); WAL mode; FK enforcement
-│   │   ├── schema.sql          # Authoritative schema definition
+│   │   ├── initial_schema.sql  # Frozen baseline schema (read by initial migration)
+│   │   ├── current_schema.sql  # Documentation: schema after all migrations
 │   │   └── migrations/         # Alembic migration scripts
 │   ├── listener/
 │   │   ├── main.py             # Run loop, reconnect logic, HTTP posting

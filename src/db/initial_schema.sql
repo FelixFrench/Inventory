@@ -1,3 +1,14 @@
+-- initial_schema.sql
+--
+-- The database schema as of the V1.1.0 migration baseline (Alembic revision
+-- 0a3435ca1dec). This file is read by that migration script to create all tables
+-- on a fresh install.
+--
+-- !! FROZEN — DO NOT MODIFY !!
+-- Adding, removing, or changing columns here breaks the migration chain for fresh
+-- installs. All schema changes must go through new Alembic migration scripts.
+-- For a reference of the current complete schema, see current_schema.sql.
+
 -- Inventory V1.1.0 Schema (Phase 1)
 -- SQLite. WAL mode is enabled at connection time in db.py, not here.
 
@@ -37,7 +48,6 @@ CREATE TABLE prices (
     price_pence INTEGER,
     price_type  TEXT NOT NULL DEFAULT 'unit'
                     CHECK(price_type IN ('unit', 'per_kg')),
-    product_url TEXT NULL,
     PRIMARY KEY (barcode, retailer_id)
 );
 

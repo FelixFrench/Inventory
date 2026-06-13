@@ -37,7 +37,7 @@ INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysP
 INSERT INTO config (key, value) VALUES ('scan_mode', 'out');
 """
 
-_SCHEMA_PATH = Path(__file__).parents[2] / "src" / "db" / "schema.sql"
+_SCHEMA_PATH = Path(__file__).parents[2] / "src" / "db" / "initial_schema.sql"
 
 
 @pytest.fixture
@@ -165,15 +165,6 @@ def test_migration_discards_pending_lookups_rows():
         os.unlink(db_path)
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Migration chain broken for fresh DBs: initial_schema reads current "
-        "schema.sql which already includes product_url, then "
-        "a1b2c3d4e5f6_add_product_url_to_prices tries to add it again. "
-        "Requires idempotent migration fix (production change — see dev report)."
-    ),
-)
 def test_migration_fresh_db():
     import os
     import tempfile

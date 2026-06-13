@@ -17,7 +17,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TABLE prices ADD COLUMN product_url TEXT NULL")
+    import sqlalchemy
+    conn = op.get_bind()
+    existing_cols = [
+        row[1]
+        for row in conn.execute(
+            sqlalchemy.text("PRAGMA table_info(prices)")
+        ).fetchall()
+    ]
+    if "product_url" not in existing_cols:
+        op.execute("ALTER TABLE prices ADD COLUMN product_url TEXT NULL")
 
 
 def downgrade() -> None:
