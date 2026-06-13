@@ -1,3 +1,5 @@
+"""Tests for src/api/reports.py — inventory, low-stock, and unresolved reports."""
+
 import sqlite3
 from unittest.mock import patch
 

@@ -166,8 +166,6 @@ Inventory/
 │   │   ├── main.py             # Poll loop, process_row, startup sleep
 │   │   ├── off.py              # OpenFoodFacts client
 │   │   └── sainsburys.py       # Sainsbury's price lookup
-│   └── tests/
-│       └── test_sainsburys.py  # Sainsbury's scraper tests (collected from src/)
 ├── frontend/
 │   ├── index.html              # Mode toggle
 │   ├── index.js
@@ -185,8 +183,10 @@ Inventory/
 ├── tests/
 │   ├── conftest.py
 │   ├── api/
+│   ├── db/
 │   ├── listener/
 │   └── worker/
+│       └── test_sainsburys.py
 ├── scripts/
 │   └── wipe_db.sh
 ├── phase5_prototype.py
@@ -200,11 +200,10 @@ Inventory/
 ## Running Tests
 
 ```bash
-# From repo root — must be run without a path argument to collect all test locations
 pytest
 ```
 
-110 tests across all modules. `src/tests/test_sainsburys.py` lives under `src/` and is only collected when running `pytest` from the repo root with no path argument.
+243 tests across all modules.
 
 ---
 

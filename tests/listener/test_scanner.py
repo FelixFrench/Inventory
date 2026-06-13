@@ -1,3 +1,5 @@
+"""Tests for src/listener/scanner.py and src/listener/main.py — device and HTTP posting."""
+
 import errno
 from unittest.mock import MagicMock, patch
 
@@ -205,13 +207,10 @@ def test_post_scan_network_error(mock_post):
 
 
 @patch("src.listener.main.httpx.post")
-def test_post_scan_non_2xx(mock_post, caplog):
-    import logging
+def test_post_scan_non_2xx(mock_post):
     mock_response = MagicMock()
     mock_response.status_code = 500
     mock_post.return_value = mock_response
-
-    with caplog.at_level(logging.WARNING, logger="root"):
-        post_scan("12345678")  # must not raise
-
-    assert any(r.levelno == logging.WARNING for r in caplog.records)
+    with patch("src.listener.main.logger") as mock_logger:
+        post_scan("12345678")
+    mock_logger.warning.assert_called_once()

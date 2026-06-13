@@ -1,4 +1,6 @@
-﻿import sqlite3
+﻿"""Tests for src/api/routers/scan.py — barcode input validation (format/length)."""
+
+import sqlite3
 
 import pytest
 from starlette.testclient import TestClient

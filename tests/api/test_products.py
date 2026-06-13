@@ -1,4 +1,6 @@
-﻿import sqlite3
+﻿"""Tests for src/api/routers/products.py — product minimum-quantity management."""
+
+import sqlite3
 from unittest.mock import patch
 
 import pytest

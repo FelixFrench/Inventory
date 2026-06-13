@@ -1,3 +1,5 @@
+"""Tests for src/api/routers/ws.py and src/api/main.py — WebSocket and poll loop."""
+
 import asyncio
 import json
 import sqlite3
@@ -261,7 +263,9 @@ def test_ws_connect_and_receive(client, db):
     assert msg["type"] == "scan"
 
 
-# ── Phase 3b: inventory_quantity in scan broadcast ───────────────────────────
+# ---------------------------------------------------------------------------
+# Inventory quantity in scan broadcast
+# ---------------------------------------------------------------------------
 
 def test_scan_broadcast_includes_inventory_quantity(client, db):
     _create_session(db)

@@ -1,4 +1,6 @@
-﻿import sqlite3
+"""Tests for src/api/routers/scan.py — session-aware scan endpoint behaviour."""
+
+import sqlite3
 from unittest.mock import patch
 
 import pytest
@@ -89,7 +91,7 @@ def _create_session(db, session_type="in") -> int:
 
 
 # ---------------------------------------------------------------------------
-# Test 1: Active session + unknown barcode → info=pending, price=pending
+# Scan cases
 # ---------------------------------------------------------------------------
 
 def test_scan_unknown_barcode_creates_pending_item(client, db):
@@ -113,10 +115,6 @@ def test_scan_unknown_barcode_creates_pending_item(client, db):
     bc = db.execute("SELECT barcode FROM barcodes WHERE barcode = ?", (_BARCODE,)).fetchone()
     assert bc is not None
 
-
-# ---------------------------------------------------------------------------
-# Test 2: Known barcode (product_variants + prices exist) → resolved, resolved
-# ---------------------------------------------------------------------------
 
 def test_scan_known_barcode_fully_resolved(client, db):
     session_id = _create_session(db)
@@ -142,10 +140,6 @@ def test_scan_known_barcode_fully_resolved(client, db):
     assert row["price_status"] == "resolved"
 
 
-# ---------------------------------------------------------------------------
-# Test 3: Known barcode (product_variants exists, no prices) → resolved, pending
-# ---------------------------------------------------------------------------
-
 def test_scan_known_barcode_no_price(client, db):
     session_id = _create_session(db)
     db.execute("INSERT INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
@@ -166,10 +160,6 @@ def test_scan_known_barcode_no_price(client, db):
     assert row["price_status"] == "pending"
 
 
-# ---------------------------------------------------------------------------
-# Test 4: No active session → 409
-# ---------------------------------------------------------------------------
-
 def test_scan_no_active_session(client):
     resp = client.post("/scan", json={"barcode": _BARCODE})
     assert resp.status_code == 409
@@ -177,7 +167,7 @@ def test_scan_no_active_session(client):
 
 
 # ---------------------------------------------------------------------------
-# Repeat scan increments delta
+# Repeat scan
 # ---------------------------------------------------------------------------
 
 def test_scan_repeat_increments_delta(client, db):
@@ -199,7 +189,7 @@ def test_scan_repeat_increments_delta(client, db):
 
 
 # ---------------------------------------------------------------------------
-# Test 34: OperationalError → 503 with Retry-After header
+# Error handling
 # ---------------------------------------------------------------------------
 
 def test_scan_operational_error_returns_503(client):

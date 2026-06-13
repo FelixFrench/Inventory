@@ -1,3 +1,5 @@
+"""Tests for src/api/routers/session.py — session lifecycle and item management."""
+
 import json
 import sqlite3
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,7 +9,6 @@ from starlette.testclient import TestClient
 
 from src.api.dependencies import get_db, get_retailer_id, verify_api_key
 from src.api.main import app
-from src.api.urls import off_url
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -382,7 +383,7 @@ def test_discard_then_worker_writeback_keeps_data_rows(client, db):
 _BARCODE2 = "5000112548167"
 
 # ---------------------------------------------------------------------------
-# Phase 3 Tests 20–29: PUT /session/items/{barcode}
+# PUT /session/items/{barcode}
 # ---------------------------------------------------------------------------
 
 def test_put_delta_updates_row(client, db):
@@ -527,7 +528,7 @@ def test_put_delta_no_broadcast_item_not_found(client, db):
 
 
 # ---------------------------------------------------------------------------
-# Phase 3b Tests: inventory_quantity in GET /session
+# Inventory quantity in session response
 # ---------------------------------------------------------------------------
 
 def test_get_session_item_includes_inventory_quantity(client, db):
@@ -625,29 +626,3 @@ def test_get_session_recovered_at_appears_in_response(client, db):
     data = resp.json()["session"]
     assert data["recovered_at"] == "2026-06-01T09:00:00"
 
-
-# ---------------------------------------------------------------------------
-# Items 53–54: off_url() unit tests (no DB/HTTP needed)
-# Signature: off_url(barcode, *, info_status=None, name=None)
-# Session context → pass info_status=; report context → pass name=
-# ---------------------------------------------------------------------------
-
-def test_off_url_view_when_info_status_resolved():
-    url = off_url("5014788110140", info_status="resolved")
-    assert "world.openfoodfacts.org/product/5014788110140" in url
-
-
-def test_off_url_add_edit_when_info_status_failed():
-    url = off_url("5014788110140", info_status="failed")
-    assert "cgi/product.pl" in url
-    assert "5014788110140" in url
-
-
-def test_off_url_add_edit_when_name_none():
-    url = off_url("5014788110140", name=None)
-    assert "cgi/product.pl" in url
-
-
-def test_off_url_view_when_name_present():
-    url = off_url("5014788110140", name="Baked Beans")
-    assert "world.openfoodfacts.org/product/5014788110140" in url

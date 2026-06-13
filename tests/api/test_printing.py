@@ -1,4 +1,6 @@
-﻿import sqlite3
+﻿"""Tests for src/api/printer.py — ESC/POS formatting and print endpoint."""
+
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest

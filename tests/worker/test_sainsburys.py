@@ -1,3 +1,5 @@
+"""Tests for src/worker/sainsburys.py — Sainsbury's price lookup and EAN matching."""
+
 from unittest.mock import patch, MagicMock
 from src.worker.sainsburys import get_price, _build_query, _ean_matches, _extract_price
 
@@ -7,6 +9,7 @@ from src.worker.sainsburys import get_price, _build_query, _ean_matches, _extrac
 # ---------------------------------------------------------------------------
 
 def make_product(eans, retail_price, unit_price=None, full_url=None):
+    """Return a minimal product dict as returned by the Sainsbury's API."""
     p = {
         "product_uid": "123456",
         "name": "Test Product 400g",
@@ -21,6 +24,7 @@ def make_product(eans, retail_price, unit_price=None, full_url=None):
 
 
 def make_response(products):
+    """Return a mock HTTP response with a products list payload."""
     mock = MagicMock()
     mock.status_code = 200
     mock.raise_for_status.return_value = None
@@ -29,6 +33,7 @@ def make_response(products):
 
 
 def make_error_response(status_code):
+    """Return a mock HTTP error response with no body."""
     mock = MagicMock()
     mock.status_code = status_code
     return mock
