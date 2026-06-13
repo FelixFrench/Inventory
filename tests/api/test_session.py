@@ -7,6 +7,7 @@ from starlette.testclient import TestClient
 
 from src.api.dependencies import get_db, get_retailer_id, verify_api_key
 from src.api.main import app
+from src.api.urls import off_url
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -606,3 +607,47 @@ def test_get_session_item_price_url_present_when_set(client, db):
     resp = client.get("/session")
     item = resp.json()["session"]["items"][0]
     assert item["price_url"] == url
+
+
+# ---------------------------------------------------------------------------
+# Item 7: recovered_at appears in GET /session after simulated restart
+# ---------------------------------------------------------------------------
+
+def test_get_session_recovered_at_appears_in_response(client, db):
+    session_id = _start_session(client)
+    db.execute(
+        "UPDATE sessions SET recovered_at = '2026-06-01T09:00:00' WHERE id = ?",
+        (session_id,)
+    )
+    db.commit()
+    resp = client.get("/session")
+    assert resp.status_code == 200
+    data = resp.json()["session"]
+    assert data["recovered_at"] == "2026-06-01T09:00:00"
+
+
+# ---------------------------------------------------------------------------
+# Items 53–54: off_url() unit tests (no DB/HTTP needed)
+# Signature: off_url(barcode, *, info_status=None, name=None)
+# Session context → pass info_status=; report context → pass name=
+# ---------------------------------------------------------------------------
+
+def test_off_url_view_when_info_status_resolved():
+    url = off_url("5014788110140", info_status="resolved")
+    assert "world.openfoodfacts.org/product/5014788110140" in url
+
+
+def test_off_url_add_edit_when_info_status_failed():
+    url = off_url("5014788110140", info_status="failed")
+    assert "cgi/product.pl" in url
+    assert "5014788110140" in url
+
+
+def test_off_url_add_edit_when_name_none():
+    url = off_url("5014788110140", name=None)
+    assert "cgi/product.pl" in url
+
+
+def test_off_url_view_when_name_present():
+    url = off_url("5014788110140", name="Baked Beans")
+    assert "world.openfoodfacts.org/product/5014788110140" in url

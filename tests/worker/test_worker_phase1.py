@@ -447,3 +447,61 @@ def test_phase2_success_writes_null_product_url_when_none(db):
     ).fetchone()
     assert pr is not None
     assert pr["product_url"] is None
+
+
+# ---------------------------------------------------------------------------
+# Item 50: Migration on a clean (empty) DB creates schema + worker_state seed
+#
+# KNOWN BUG: initial_schema reads the current schema.sql at migration time.
+# schema.sql already includes product_url (added in Phase 7b), so the later
+# a1b2c3d4e5f6_add_product_url_to_prices migration fails with
+# "duplicate column name: product_url" on a fresh DB.
+# The migration chain works for upgrades from V1 only because initial_schema
+# is stamped as already applied in that path.
+# Fix required: make a1b2c3d4e5f6 idempotent (check column before adding).
+# Marked xfail until that migration is corrected.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "Migration chain broken for fresh DBs: initial_schema reads current "
+        "schema.sql which already includes product_url, then "
+        "a1b2c3d4e5f6_add_product_url_to_prices tries to add it again. "
+        "Requires idempotent migration fix (production change, out of scope "
+        "for Phase 7c)."
+    ),
+)
+def test_migration_fresh_db():
+    import os
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.upgrade(alembic_cfg, "head")
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "sessions" in tables
+        assert "session_items" in tables
+        assert "worker_state" in tables
+        assert "pending_lookups" not in tables
+
+        ws = conn.execute(
+            "SELECT id, off_last_called_at FROM worker_state WHERE id = 1"
+        ).fetchone()
+        assert ws is not None
+        assert ws["off_last_called_at"] == "1970-01-01T00:00:00"
+        conn.close()
+    finally:
+        os.unlink(db_path)

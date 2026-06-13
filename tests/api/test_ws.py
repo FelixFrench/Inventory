@@ -361,3 +361,63 @@ def test_scan_broadcast_price_url_none_when_no_product_url(client, db):
         msg = ws.receive_json()
 
     assert msg["price_url"] is None
+
+
+# ── Item 25: broadcast() with zero clients ───────────────────────────────────
+
+def test_cm_broadcast_zero_clients_no_error():
+    manager.active_connections = []
+    asyncio.run(manager.broadcast("hello"))
+    assert manager.active_connections == []
+
+
+# ── Item 29: poll emits resolution when price_status flips ──────────────────
+
+def test_poll_emits_on_price_status_change():
+    last_seen = {_BARCODE: ("resolved", "pending")}
+    rows = [_make_row(_BARCODE, "resolved", "resolved")]
+    payloads = _compute_poll_updates(rows, last_seen)
+    assert len(payloads) == 1
+    assert last_seen[_BARCODE] == ("resolved", "resolved")
+    msg = json.loads(payloads[0])
+    assert msg["type"] == "resolution"
+    assert msg["barcode"] == _BARCODE
+
+
+# ── Item 55: scan broadcast includes price_url when product_url is set ───────
+
+def test_scan_broadcast_includes_price_url_when_set(client, db):
+    _create_session(db)
+    url = "https://www.sainsburys.co.uk/gol-ui/product/test"
+    db.execute("INSERT INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
+    db.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name) VALUES (?, ?, 'Beans')",
+        (_BARCODE, _RETAILER_ID),
+    )
+    db.execute(
+        "INSERT INTO prices (barcode, retailer_id, price_pence, price_type, product_url)"
+        " VALUES (?, ?, 123, 'unit', ?)",
+        (_BARCODE, _RETAILER_ID, url),
+    )
+    db.commit()
+
+    with client.websocket_connect("/ws") as ws:
+        client.post("/scan", json={"barcode": _BARCODE})
+        msg = ws.receive_json()
+
+    assert msg["price_url"] == url
+
+
+# ── Item 56: build_payload("resolution", ...) price_url ─────────────────────
+
+def test_build_payload_resolution_price_url_present_when_set():
+    url = "https://www.sainsburys.co.uk/gol-ui/product/test"
+    row = _make_row(_BARCODE, "resolved", "resolved", product_url=url)
+    payload = build_payload("resolution", row)
+    assert payload["price_url"] == url
+
+
+def test_build_payload_resolution_price_url_none_when_absent():
+    row = _make_row(_BARCODE, "resolved", "resolved", product_url=None)
+    payload = build_payload("resolution", row)
+    assert payload["price_url"] is None
