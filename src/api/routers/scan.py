@@ -11,7 +11,7 @@ from src.api.routers.ws import build_payload, manager
 from src.db.db import get_connection
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["Scanning"])
 
 _503 = HTTPException(
     status_code=503,
@@ -108,7 +108,14 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
 
 
 @router.post("/scan", response_model=ScanResponse)
-async def scan(body: ScanRequest, request: Request):
+async def scan(body: ScanRequest, request: Request) -> ScanResponse:
+    """
+    Record a barcode scan against the active session.
+
+    Increments the session delta for the barcode by 1 (or creates the item if first
+    scan). Broadcasts a WebSocket message to all connected clients. Returns 409 if no
+    session is currently active, 503 on transient database contention.
+    """
     retailer_id = request.app.state.sainsburys_retailer_id
     result = await asyncio.to_thread(_do_scan, body.barcode, retailer_id)
     payload = build_payload("scan", result)

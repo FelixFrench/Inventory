@@ -9,11 +9,17 @@ from src.api.dependencies import get_db
 from src.api.reports import get_inventory_report, get_low_stock_report
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/print")
+router = APIRouter(prefix="/print", tags=["Print"])
 
 
-@router.post("/inventory")
-def post_print_inventory(request: Request, db=Depends(get_db)):
+@router.post("/inventory", response_model=None)
+def post_print_inventory(request: Request, db=Depends(get_db)) -> dict | JSONResponse:
+    """
+    Print the full inventory report to the configured receipt printer.
+
+    Returns `{printed: true}` on success. Returns 503 if the printer is not
+    configured or is unreachable.
+    """
     retailer_id = request.app.state.sainsburys_retailer_id
     data = get_inventory_report(db, retailer_id)
     try:
@@ -24,8 +30,14 @@ def post_print_inventory(request: Request, db=Depends(get_db)):
     return {"printed": True}
 
 
-@router.post("/low-stock")
-def post_print_low_stock(request: Request, db=Depends(get_db)):
+@router.post("/low-stock", response_model=None)
+def post_print_low_stock(request: Request, db=Depends(get_db)) -> dict | JSONResponse:
+    """
+    Print the low-stock report to the configured receipt printer.
+
+    Returns `{printed: true}` on success. Returns 503 if the printer is not
+    configured or is unreachable.
+    """
     retailer_id = request.app.state.sainsburys_retailer_id
     data = get_low_stock_report(db, retailer_id)
     try:
