@@ -1,7 +1,4 @@
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
+// esc() lives in shared-utils.js (loaded before this script).
 
 // Track the currently active inline edit so only one row is open at a time.
 let activeEdit = null;

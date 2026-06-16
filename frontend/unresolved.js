@@ -1,10 +1,4 @@
-function esc(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+// esc() lives in shared-utils.js (loaded before this script).
 
 function makeBadge(label) {
   const span = document.createElement('span');

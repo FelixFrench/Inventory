@@ -177,6 +177,20 @@ def test_get_session_with_items(client, db):
     assert item["price"] == {"value": 1.23, "status": "resolved"}
 
 
+def test_get_session_weight_kilograms(client, db):
+    # >= 1000 g must format as kg, matching the WS feed and reports (Issue 3 fix:
+    # GET /session now uses the shared format_weight instead of an inline "Ng").
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved",
+               name="Plain Flour", brand="Allinson", weight_g=1500.0, price_pence=200)
+
+    resp = client.get("/session")
+    assert resp.status_code == 200
+    item = resp.json()["session"]["items"][0]
+    assert item["weight"] == {"value": "1.5kg", "status": "resolved"}
+
+
 def test_get_session_status_loading(client, db):
     session_id = _start_session(client)
     _seed_item(db, _BARCODE, session_id, info_status="pending", price_status="pending")

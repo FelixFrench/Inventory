@@ -17,7 +17,7 @@ from src.api.dependencies import verify_api_key, verify_docs_access
 from src.api.models import DocsLoginRequest
 from src.api.routers import printing as print_router
 from src.api.routers import products, reports, scan, session
-from src.api.routers.ws import build_payload, manager
+from src.api.routers.ws import POLL_QUERY, build_payload, manager
 from src.api.routers.ws import router as ws_router
 from src.db.db import get_connection
 
@@ -27,24 +27,6 @@ load_dotenv(Path(__file__).parents[2] / "config.local.env")
 
 
 logger = logging.getLogger(__name__)
-
-POLL_QUERY = """
-SELECT si.barcode,
-       si.delta AS session_delta,
-       si.info_status,
-       si.price_status,
-       pv.name,
-       pv.brand,
-       pv.weight_g,
-       pr.price_pence,
-       pr.product_url
-FROM   session_items si
-LEFT   JOIN product_variants pv
-           ON pv.barcode = si.barcode AND pv.retailer_id = ?
-LEFT   JOIN prices pr
-           ON pr.barcode = si.barcode AND pr.retailer_id = ?
-JOIN   sessions s ON s.id = si.session_id
-"""
 
 
 def _compute_poll_updates(rows, last_seen: dict) -> list[str]:

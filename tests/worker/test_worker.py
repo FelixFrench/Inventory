@@ -15,6 +15,7 @@ from src.worker.main import (
     _phase1_success,
     _phase2_failure,
     _phase2_success,
+    _poll_forever,
 )
 
 SCHEMA = """
@@ -129,6 +130,10 @@ def test_off_failure_price_status_is_not_possible_not_failed(db):
 # ---------------------------------------------------------------------------
 
 def test_off_success_rowcount_zero_when_session_discarded(db):
+    # Cache-retention behaviour (documented in _poll_iteration): when the session
+    # was discarded mid-lookup the session_items UPDATE affects zero rows, but the
+    # product_variants row is still committed as a cache warm-up. This asserts both
+    # rowcount == 0 AND that the variant row persists.
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
     db.commit()
 
@@ -170,6 +175,9 @@ def test_off_failure_updates_worker_state(db):
 # ---------------------------------------------------------------------------
 
 def test_sainsburys_success_rowcount_zero_when_session_discarded(db):
+    # Cache-retention behaviour (documented in _poll_iteration): the prices row is
+    # committed even when the session_items UPDATE affects zero rows (session
+    # discarded mid-lookup). Asserts both rowcount == 0 AND that the price persists.
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
     db.commit()
 
@@ -326,3 +334,35 @@ def test_poll2_only_runs_when_poll1_empty(db):
     assert poll2 is not None
     assert poll2["barcode"] == _BARCODE
     assert poll2["name"] == "Baked Beans"
+
+
+# ---------------------------------------------------------------------------
+# Poll loop resilience (Issue 1 fix)
+# ---------------------------------------------------------------------------
+
+class _LoopBreak(BaseException):
+    """Not an Exception, so _poll_forever's `except Exception` won't swallow it —
+    used to break out of the otherwise-infinite loop once the test has seen enough."""
+
+
+def test_poll_forever_survives_unexpected_exception():
+    calls = []
+
+    def fake_iteration(db, retailer_id):
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        raise _LoopBreak
+
+    with patch("src.worker.main._poll_iteration", side_effect=fake_iteration), \
+         patch("src.worker.main.time.sleep") as mock_sleep, \
+         patch("src.worker.main.logger") as mock_logger:
+        with pytest.raises(_LoopBreak):
+            _poll_forever(MagicMock(), _RETAILER_ID)
+
+    # The first OperationalError was caught and logged; the loop then reached a
+    # second iteration — proving it did not propagate out and kill the worker.
+    assert len(calls) == 2
+    mock_logger.exception.assert_called_once()
+    # One idle-backoff sleep ran after the caught exception (before the retry).
+    mock_sleep.assert_called_once()

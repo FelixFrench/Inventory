@@ -1,12 +1,5 @@
+from src.api.formatting import format_weight
 from src.api.urls import off_url as build_off_url
-
-
-def format_weight(weight_g) -> str | None:
-    if weight_g is None:
-        return None
-    if weight_g >= 1000:
-        return f"{weight_g / 1000:g}kg"
-    return f"{weight_g:g}g"
 
 
 def _label_for_info_field(info_status, has_pv_row, field_value) -> str:

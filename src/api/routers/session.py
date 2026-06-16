@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.dependencies import get_retailer_id
+from src.api.formatting import format_weight
 from src.api.models import (
     ConfirmResponse,
     DeltaUpdateRequest,
@@ -64,7 +65,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
             "failed" if r['price_status'] == "not_possible" else r['price_status']
         )
 
-        weight_val = f"{r['weight_g']:g}g" if r['weight_g'] is not None else None
+        weight_val = format_weight(r['weight_g'])
         price_val = r['price_pence'] / 100 if r['price_pence'] is not None else None
 
         items.append({

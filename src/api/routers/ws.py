@@ -1,5 +1,6 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from src.api.formatting import format_weight
 from src.api.urls import off_url as build_off_url
 
 router = APIRouter(tags=["WebSocket"])
@@ -33,6 +34,28 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+# Resolution-broadcast poll query for the FastAPI background task
+# (_session_poll_loop in main.py). Kept here because its column list is the
+# contract consumed by build_payload below — the two must stay in sync.
+POLL_QUERY = """
+SELECT si.barcode,
+       si.delta AS session_delta,
+       si.info_status,
+       si.price_status,
+       pv.name,
+       pv.brand,
+       pv.weight_g,
+       pr.price_pence,
+       pr.product_url
+FROM   session_items si
+LEFT   JOIN product_variants pv
+           ON pv.barcode = si.barcode AND pv.retailer_id = ?
+LEFT   JOIN prices pr
+           ON pr.barcode = si.barcode AND pr.retailer_id = ?
+JOIN   sessions s ON s.id = si.session_id
+"""
+
+
 @router.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     """
@@ -56,20 +79,13 @@ def _status_to_wire(db_status: str) -> str:
     return _STATUS_MAP.get(db_status, "failed")  # 'failed' and 'not_possible' → 'failed'
 
 
-def _format_weight(weight_g) -> str | None:
-    if weight_g is None:
-        return None
-    if weight_g >= 1000:
-        return f"{weight_g / 1000:g}kg"
-    return f"{weight_g:g}g"
-
-
 def build_payload(type_: str, row) -> dict:
     """Build wire payload from a DB row or dict.
 
     Row must provide keys: barcode, session_delta, info_status, price_status,
-    name, brand, weight_g, price_pence. Works with sqlite3.Row objects (which
-    support dict-style access when row_factory = sqlite3.Row) and plain dicts.
+    name, brand, weight_g, price_pence, product_url. Works with sqlite3.Row
+    objects (which support dict-style access when row_factory = sqlite3.Row)
+    and plain dicts.
     """
     info_wire = _status_to_wire(row["info_status"])
     price_wire = _status_to_wire(row["price_status"])
@@ -77,7 +93,7 @@ def build_payload(type_: str, row) -> dict:
     if info_wire == "resolved":
         name_val = row["name"]
         brand_val = row["brand"]
-        weight_val = _format_weight(row["weight_g"])
+        weight_val = format_weight(row["weight_g"])
     else:
         name_val = brand_val = weight_val = None
 

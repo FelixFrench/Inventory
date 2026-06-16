@@ -126,8 +126,3 @@ def get_price(barcode: str, name: str, brand: str, weight_g: float) -> dict | No
 
     logging.warning(f"Sainsbury's: no EAN match after {_MAX_PAGES} pages for barcode {barcode}")
     return None
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
-    print(get_price("00485081", "Mixed beans in mild chilli sauce", "Sainsbury's", 395))
-    

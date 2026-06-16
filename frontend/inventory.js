@@ -1,7 +1,4 @@
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
+// esc() lives in shared-utils.js (loaded before this script).
 
 function pence(p) {
   return p != null ? '£' + (p / 100).toFixed(2) : '—';

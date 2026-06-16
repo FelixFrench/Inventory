@@ -18,11 +18,7 @@ function connectWS() {
 }
 
 // ── HTML helpers ────────────────────────────────────────────────────────────
-
-function esc(s) {
-    return String(s ?? '').replace(/[&<>"']/g, c =>
-        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
+// esc() lives in shared-utils.js (loaded before this script on every page).
 
 // Returns the shared loading/failed markup, or null if the field has a value to display.
 function _statusMarkup(field) {
@@ -131,8 +127,12 @@ async function handleDeltaChange(barcode, diff) {
             rows[barcode].session_delta = newDelta;
             updateRowDOM(barcode);
             updateBanner();
+        } else {
+            showToast('Could not update quantity');
         }
-    } catch (_) {}
+    } catch (_) {
+        showToast('Could not update quantity — check connection');
+    }
 }
 
 function activateInlineEdit(span) {
@@ -158,16 +158,29 @@ function activateInlineEdit(span) {
         newSpan.textContent = val;
         input.replaceWith(newSpan);
         if (val !== current) {
+            // Optimistic update — revert to `current` if the PUT does not persist.
             rows[barcode].session_delta = val;
             updateRowDOM(barcode);
             updateBanner();
+            const revert = () => {
+                rows[barcode].session_delta = current;
+                updateRowDOM(barcode);
+                updateBanner();
+            };
             try {
-                await fetch(`/session/items/${encodeURIComponent(barcode)}`, {
+                const resp = await fetch(`/session/items/${encodeURIComponent(barcode)}`, {
                     method: 'PUT',
                     headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
                     body: JSON.stringify({ delta: val }),
                 });
-            } catch (_) {}
+                if (!resp.ok) {
+                    revert();
+                    showToast('Could not update quantity');
+                }
+            } catch (_) {
+                revert();
+                showToast('Could not update quantity — check connection');
+            }
         }
     }
 
@@ -321,8 +334,14 @@ async function startSession(type) {
         if (resp.status === 201) {
             const data = await resp.json();
             renderActiveSession(data.session);
+        } else if (resp.status === 409) {
+            showToast('A session is already active');
+        } else {
+            showToast('Could not start session');
         }
-    } catch (_) {}
+    } catch (_) {
+        showToast('Could not start session — check connection');
+    }
 }
 
 async function confirmSession() {
