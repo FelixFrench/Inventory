@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,7 +28,7 @@ def get_db():
 async def verify_api_key(api_key: str | None = Depends(_api_key_scheme)):
     if _API_KEY is None:
         raise RuntimeError("INVENTORY_API_KEY not set in environment or config.local.env")
-    if api_key != _API_KEY:
+    if api_key is None or not secrets.compare_digest(api_key, _API_KEY):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -37,7 +38,9 @@ async def verify_docs_access(
 ) -> None:
     if _API_KEY is None:
         raise RuntimeError("INVENTORY_API_KEY not set in environment or config.local.env")
-    if api_key == _API_KEY or docs_session == _API_KEY:
+    if (api_key is not None and secrets.compare_digest(api_key, _API_KEY)) or (
+        docs_session is not None and secrets.compare_digest(docs_session, _API_KEY)
+    ):
         return
     raise HTTPException(status_code=401, detail="Unauthorized")
 

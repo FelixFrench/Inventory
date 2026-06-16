@@ -341,3 +341,17 @@ class TestGetPrice:
         mock_get.side_effect = [make_response([match_with_empty_url])]
         result = self._call()
         assert result["product_url"] is None
+
+    @patch("src.worker.sainsburys.time.sleep")
+    @patch("src.worker.sainsburys.requests.get")
+    def test_non_http_scheme_url_rejected(self, mock_get, mock_sleep):
+        # A hostile/compromised API response must not be able to smuggle a
+        # javascript: (or other non-http) scheme through to the frontend href.
+        match_with_bad_url = make_product(
+            eans=[BARCODE],
+            retail_price={"price": 1.10, "measure": "unit"},
+            full_url="javascript:alert(1)",
+        )
+        mock_get.side_effect = [make_response([match_with_bad_url])]
+        result = self._call()
+        assert result["product_url"] is None

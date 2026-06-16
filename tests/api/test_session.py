@@ -440,13 +440,13 @@ def test_put_delta_zero_allowed(client, db):
 
 
 def test_put_delta_negative_rejected(client, db):
+    """A negative delta is rejected at the schema layer (Field(ge=0) → 422)."""
     session_id = _start_session(client, "in")
     _seed_item(db, _BARCODE, session_id, delta=2,
                info_status="resolved", price_status="resolved")
 
     resp = client.put(f"/session/items/{_BARCODE}", json={"delta": -1})
-    assert resp.status_code == 400
-    assert resp.json()["detail"]["error"] == "invalid_delta"
+    assert resp.status_code == 422
 
 
 def test_put_delta_barcode_not_in_session(client, db):

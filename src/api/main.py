@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -158,7 +159,7 @@ async def docs_login(body: DocsLoginRequest, response: Response) -> dict:
     """Exchange a valid API key for a short-lived docs session cookie."""
     if _api_deps._API_KEY is None:
         raise HTTPException(status_code=500, detail="Server misconfigured")
-    if body.api_key != _api_deps._API_KEY:
+    if not secrets.compare_digest(body.api_key, _api_deps._API_KEY):
         raise HTTPException(status_code=401, detail="Unauthorized")
     response.set_cookie(
         key="docs_session",

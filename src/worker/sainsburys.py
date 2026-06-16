@@ -118,6 +118,11 @@ def get_price(barcode: str, name: str, brand: str, weight_g: float) -> dict | No
                     url = product.get("full_url") or None
                     if url and url.startswith("://"):
                         url = "https" + url
+                    # Reject any non-http(s) scheme before storing — a hostile
+                    # API response must not be able to inject e.g. a javascript:
+                    # URL that later reaches an anchor href in the frontend.
+                    if url and not url.startswith(("https://", "http://")):
+                        url = None
                     price["product_url"] = url
                 return price
 

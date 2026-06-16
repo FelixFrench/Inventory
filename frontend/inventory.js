@@ -11,10 +11,14 @@ function render(data) {
   } else {
     const rows = data.items.map(item => {
       const nameText = item.name || item.barcode;
-      const nameHtml = `<a href="${esc(item.off_url)}" target="_blank" rel="noopener noreferrer">${esc(nameText)}</a>`;
+      const offHref = sanitiseHref(item.off_url);
+      const nameHtml = offHref
+        ? `<a href="${esc(offHref)}" target="_blank" rel="noopener noreferrer">${esc(nameText)}</a>`
+        : esc(nameText);
       const priceText = pence(item.price_pence);
-      const priceHtml = item.price_url
-        ? `<a href="${esc(item.price_url)}" target="_blank" rel="noopener noreferrer">${priceText}</a>`
+      const priceHref = sanitiseHref(item.price_url);
+      const priceHtml = priceHref
+        ? `<a href="${esc(priceHref)}" target="_blank" rel="noopener noreferrer">${priceText}</a>`
         : priceText;
       return `
           <tr>

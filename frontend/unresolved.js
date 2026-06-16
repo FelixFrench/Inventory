@@ -46,12 +46,17 @@ function renderTable(items) {
     // Barcode — link to OFF page
     const tdBarcode = document.createElement('td');
     tdBarcode.className = 'barcode-fallback';
-    const barcodeLink = document.createElement('a');
-    barcodeLink.href = item.off_url;
-    barcodeLink.target = '_blank';
-    barcodeLink.rel = 'noopener noreferrer';
-    barcodeLink.textContent = item.barcode;
-    tdBarcode.appendChild(barcodeLink);
+    const offHref = sanitiseHref(item.off_url);
+    if (offHref) {
+      const barcodeLink = document.createElement('a');
+      barcodeLink.href = offHref;
+      barcodeLink.target = '_blank';
+      barcodeLink.rel = 'noopener noreferrer';
+      barcodeLink.textContent = item.barcode;
+      tdBarcode.appendChild(barcodeLink);
+    } else {
+      tdBarcode.textContent = item.barcode;
+    }
     tr.appendChild(tdBarcode);
 
     // Name — value or badge, same as Brand/Weight
@@ -74,9 +79,10 @@ function renderTable(items) {
     // Price
     const tdPrice = document.createElement('td');
     const priceEl = renderPrice(item.price);
-    if (item.price_url) {
+    const priceHref = sanitiseHref(item.price_url);
+    if (priceHref) {
       const priceLink = document.createElement('a');
-      priceLink.href = item.price_url;
+      priceLink.href = priceHref;
       priceLink.target = '_blank';
       priceLink.rel = 'noopener noreferrer';
       priceLink.appendChild(priceEl);

@@ -335,9 +335,12 @@ async def put_session_item_delta(barcode: str, body: DeltaUpdateRequest) -> dict
     Update the delta for a specific item in the active session.
 
     Sets the item's session delta to the supplied value and broadcasts a WebSocket
-    update to all connected clients. Returns 400 if the delta is negative, 404 if the
-    barcode is not in the current session, 409 if no session is active.
+    update to all connected clients. A negative delta is rejected at the schema layer
+    (422, DeltaUpdateRequest.delta has ge=0). Returns 404 if the barcode is not in the
+    current session, 409 if no session is active.
     """
+    # Defence in depth: schema validation (Field(ge=0)) already rejects negatives
+    # with 422 before this handler runs, so this branch is not reachable via HTTP.
     if body.delta < 0:
         raise HTTPException(status_code=400, detail={"error": "invalid_delta"})
     try:

@@ -71,10 +71,13 @@ def set_minimum_quantity(
     """
     Set the minimum quantity threshold for a product.
 
-    Updates the restock alert level for the given barcode. Returns 400 if the
-    supplied minimum_quantity is negative, 404 if the barcode does not exist in
-    inventory.
+    Updates the restock alert level for the given barcode. A negative
+    minimum_quantity is rejected at the schema layer (422,
+    SetMinimumQuantityRequest.minimum_quantity has ge=0). Returns 404 if the
+    barcode does not exist in inventory.
     """
+    # Defence in depth: schema validation (Field(ge=0)) already rejects negatives
+    # with 422 before this handler runs, so this branch is not reachable via HTTP.
     if body.minimum_quantity < 0:
         return JSONResponse(status_code=400, content={"error": "invalid_minimum_quantity"})
     try:

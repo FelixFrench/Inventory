@@ -57,11 +57,11 @@ class DiscardResponse(BaseModel):
 
 
 class DeltaUpdateRequest(BaseModel):
-    delta: int
+    delta: int = Field(ge=0)
 
 
 class SetMinimumQuantityRequest(BaseModel):
-    minimum_quantity: int
+    minimum_quantity: int = Field(ge=0)
 
 
 class DocsLoginRequest(BaseModel):

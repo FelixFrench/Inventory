@@ -71,9 +71,13 @@ function makeRowHTML(barcode) {
     const deltaSign  = sessionType === 'out' ? '−' : '+';
 
     const decDisabled = r.session_delta === 0 ? ' disabled' : '';
-    const nameLink = `<a href="${esc(r.off_url)}" target="_blank" rel="noopener noreferrer" class="feed-item-name">${renderField(r.name)}</a>`;
-    const priceHtml = r.price_url
-        ? `<a href="${esc(r.price_url)}" target="_blank" rel="noopener noreferrer">${renderPrice(r.price)}</a>`
+    const offHref = sanitiseHref(r.off_url);
+    const nameLink = offHref
+        ? `<a href="${esc(offHref)}" target="_blank" rel="noopener noreferrer" class="feed-item-name">${renderField(r.name)}</a>`
+        : `<span class="feed-item-name">${renderField(r.name)}</span>`;
+    const priceHref = sanitiseHref(r.price_url);
+    const priceHtml = priceHref
+        ? `<a href="${esc(priceHref)}" target="_blank" rel="noopener noreferrer">${renderPrice(r.price)}</a>`
         : renderPrice(r.price);
     const meta = [renderField(r.brand), renderField(r.weight), priceHtml].join(' · ');
     return `

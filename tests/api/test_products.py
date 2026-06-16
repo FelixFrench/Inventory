@@ -195,8 +195,8 @@ def test_put_minimum_quantity_zero_is_valid(client, db):
     assert resp.json()["minimum_quantity"] == 0
 
 
-def test_put_minimum_quantity_negative_returns_400(client, db):
-    """minimum_quantity < 0 returns 400 with invalid_minimum_quantity."""
+def test_put_minimum_quantity_negative_returns_422(client, db):
+    """minimum_quantity < 0 is rejected at the schema layer (Field(ge=0) → 422)."""
     db.executescript("""
         INSERT INTO barcodes VALUES ('5014788110140');
         INSERT INTO inventory (barcode) VALUES ('5014788110140');
@@ -205,8 +205,7 @@ def test_put_minimum_quantity_negative_returns_400(client, db):
         "/products/5014788110140/minimum_quantity",
         json={"minimum_quantity": -1},
     )
-    assert resp.status_code == 400
-    assert resp.json() == {"error": "invalid_minimum_quantity"}
+    assert resp.status_code == 422
 
 
 def test_put_minimum_quantity_float_returns_400(client, db):
