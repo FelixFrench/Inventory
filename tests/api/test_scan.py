@@ -1,3 +1,5 @@
+﻿"""Tests for src/api/routers/scan.py — barcode input validation (format/length)."""
+
 import sqlite3
 
 import pytest
@@ -8,19 +10,18 @@ from src.api.main import app
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
-CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
-CREATE TABLE scan_events (id INTEGER PRIMARY KEY AUTOINCREMENT, barcode TEXT NOT NULL, retailer_id INTEGER, direction TEXT NOT NULL, timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE product_variants (id INTEGER PRIMARY KEY AUTOINCREMENT, canonical_product_id INTEGER, name TEXT, brand TEXT, weight_g REAL, info_source TEXT, info_last_updated TIMESTAMP);
-CREATE TABLE barcodes (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, product_variant_id INTEGER, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE inventory (product_variant_id INTEGER PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE pending_lookups (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, queued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, status TEXT NOT NULL DEFAULT 'pending', PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, weight_g REAL, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL, started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL, barcode TEXT NOT NULL, delta INTEGER NOT NULL, info_status TEXT NOT NULL DEFAULT 'pending', price_status TEXT NOT NULL DEFAULT 'pending', first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY, off_last_called_at TEXT NOT NULL);
+CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
-INSERT INTO config (key, value) VALUES ('scan_mode', 'out');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
 """
-
-KNOWN_BARCODE = "1234567890123"
-UNKNOWN_BARCODE = "9999999999999"
 
 
 @pytest.fixture
@@ -42,127 +43,9 @@ def client(db):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[verify_api_key] = lambda: None
+    app.state.sainsburys_retailer_id = 1
     yield TestClient(app)
     app.dependency_overrides.clear()
-
-
-def _seed_known_barcode(db, quantity=5, mode="out"):
-    db.execute("UPDATE config SET value = ? WHERE key = 'scan_mode'", (mode,))
-    db.execute("INSERT INTO product_variants (id) VALUES (1)")
-    db.execute(
-        "INSERT INTO barcodes (barcode, retailer_id, product_variant_id) VALUES (?, 1, 1)",
-        (KNOWN_BARCODE,),
-    )
-    if quantity is not None:
-        db.execute(
-            "INSERT INTO inventory (product_variant_id, quantity) VALUES (1, ?)", (quantity,)
-        )
-    db.commit()
-
-
-def test_known_barcode_out_decrements(client, db):
-    _seed_known_barcode(db, quantity=5, mode="out")
-
-    resp = client.post("/scan", json={"barcode": KNOWN_BARCODE})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["known"] is True
-    assert data["direction"] == "out"
-
-    qty = db.execute(
-        "SELECT quantity FROM inventory WHERE product_variant_id = 1"
-    ).fetchone()["quantity"]
-    assert qty == 4
-
-    event = db.execute(
-        "SELECT direction FROM scan_events WHERE barcode = ?", (KNOWN_BARCODE,)
-    ).fetchone()
-    assert event["direction"] == "out"
-
-
-def test_known_barcode_in_increments(client, db):
-    _seed_known_barcode(db, quantity=5, mode="in")
-
-    resp = client.post("/scan", json={"barcode": KNOWN_BARCODE})
-    assert resp.status_code == 200
-    assert resp.json()["direction"] == "in"
-
-    qty = db.execute(
-        "SELECT quantity FROM inventory WHERE product_variant_id = 1"
-    ).fetchone()["quantity"]
-    assert qty == 6
-
-
-def test_out_at_zero_stays_zero(client, db):
-    _seed_known_barcode(db, quantity=0, mode="out")
-
-    resp = client.post("/scan", json={"barcode": KNOWN_BARCODE})
-    assert resp.status_code == 200
-
-    qty = db.execute(
-        "SELECT quantity FROM inventory WHERE product_variant_id = 1"
-    ).fetchone()["quantity"]
-    assert qty == 0
-
-
-def test_unknown_barcode_creates_pending_lookup(client, db):
-    resp = client.post("/scan", json={"barcode": UNKNOWN_BARCODE})
-    assert resp.status_code == 200
-    assert resp.json()["known"] is False
-
-    row = db.execute(
-        "SELECT status FROM pending_lookups WHERE barcode = ?", (UNKNOWN_BARCODE,)
-    ).fetchone()
-    assert row is not None
-    assert row["status"] == "pending"
-
-    bc_row = db.execute(
-        "SELECT product_variant_id FROM barcodes WHERE barcode = ?", (UNKNOWN_BARCODE,)
-    ).fetchone()
-    assert bc_row is not None
-    assert bc_row["product_variant_id"] is None
-
-    inv_count = db.execute("SELECT COUNT(*) FROM inventory").fetchone()[0]
-    assert inv_count == 0
-
-
-def test_unknown_barcode_twice_no_duplicate(client, db):
-    client.post("/scan", json={"barcode": UNKNOWN_BARCODE})
-    client.post("/scan", json={"barcode": UNKNOWN_BARCODE})
-
-    count = db.execute(
-        "SELECT COUNT(*) FROM pending_lookups WHERE barcode = ?", (UNKNOWN_BARCODE,)
-    ).fetchone()[0]
-    assert count == 1
-
-    events = db.execute(
-        "SELECT COUNT(*) FROM scan_events WHERE barcode = ?", (UNKNOWN_BARCODE,)
-    ).fetchone()[0]
-    assert events == 2
-
-
-def test_known_barcode_no_inventory_row_out(client, db):
-    _seed_known_barcode(db, quantity=None, mode="out")
-
-    resp = client.post("/scan", json={"barcode": KNOWN_BARCODE})
-    assert resp.status_code == 200
-
-    qty = db.execute(
-        "SELECT quantity FROM inventory WHERE product_variant_id = 1"
-    ).fetchone()["quantity"]
-    assert qty == 0
-
-
-def test_known_barcode_no_inventory_row_in(client, db):
-    _seed_known_barcode(db, quantity=None, mode="in")
-
-    resp = client.post("/scan", json={"barcode": KNOWN_BARCODE})
-    assert resp.status_code == 200
-
-    qty = db.execute(
-        "SELECT quantity FROM inventory WHERE product_variant_id = 1"
-    ).fetchone()["quantity"]
-    assert qty == 1
 
 
 def test_barcode_non_numeric_returns_422(client):
@@ -178,11 +61,3 @@ def test_barcode_too_short_returns_422(client):
 def test_barcode_too_long_returns_422(client):
     resp = client.post("/scan", json={"barcode": "123456789012345"})
     assert resp.status_code == 422
-
-
-def test_missing_retailer_returns_500(client, db):
-    db.execute("DELETE FROM retailers WHERE name = 'Sainsbury''s'")
-    db.commit()
-
-    resp = client.post("/scan", json={"barcode": UNKNOWN_BARCODE})
-    assert resp.status_code == 500

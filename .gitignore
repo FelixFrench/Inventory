@@ -16,3 +16,7 @@ __pycache__/
 /.claude
 config.local.env
 frontend/config.js
+.coverage
+uvicorn.log
+frontend/swagger-ui/swagger-ui-bundle.js
+frontend/swagger-ui/swagger-ui.css

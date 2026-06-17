@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inventory — Feed</title>
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="docs-nav.css">
+  <link rel="stylesheet" href="feed.css">
+</head>
+<body>
+  <header>Inventory</header>
+  <nav>
+    <a href="/inventory.html">Inventory</a>
+    <a href="/low_stock.html">Low Stock</a>
+    <a href="/feed.html" class="active">Feed</a>
+    <a href="/unresolved.html">Unresolved</a>
+  </nav>
+
+  <div id="banner" class="banner-idle">
+    <span id="banner-text">No active session</span>
+    <button id="btn-end-session" class="hidden">End session</button>
+  </div>
+
+  <main>
+    <div id="dim-overlay"></div>
+
+    <div id="no-session">
+      <button id="btn-start-in">Start Scan In</button>
+      <button id="btn-start-out">Start Scan Out</button>
+    </div>
+
+    <div id="active-session" class="hidden">
+      <ul id="feed-list"></ul>
+    </div>
+  </main>
+
+  <div id="end-strip">
+    <p class="strip-summary" id="strip-summary"></p>
+    <div class="strip-buttons">
+      <button id="btn-confirm">Confirm</button>
+      <button id="btn-discard">Discard</button>
+    </div>
+    <p id="strip-error"></p>
+  </div>
+
+  <div id="discard-modal">
+    <div class="modal">
+      <div class="modal-title">Discard session?</div>
+      <p class="modal-body">This cannot be undone.</p>
+      <div class="modal-buttons">
+        <button id="btn-yes-discard">Discard session</button>
+        <button id="btn-keep">Keep session</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="negative-modal">
+    <div class="modal">
+      <div class="modal-title">Cannot confirm</div>
+      <div id="negative-items" class="modal-body"></div>
+      <button id="btn-close-negative">Adjust quantities</button>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <footer class="docs-footer">
+    <a href="#" id="docs-link">API Docs</a>
+  </footer>
+
+  <script src="/config.js"></script>
+  <script src="/docs-nav.js"></script>
+  <script src="/shared-utils.js"></script>
+  <script src="/feed.js"></script>
+</body>
+</html>

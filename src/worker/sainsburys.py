@@ -2,6 +2,7 @@
 
 import logging
 import time
+from typing import Any
 
 import requests
 
@@ -33,7 +34,7 @@ def _ean_matches(barcode: str, eans: list[str]) -> bool:
     return any(stripped == ean.lstrip("0") for ean in eans)
 
 
-def _extract_price(product: dict[str, object]) -> dict | None:
+def _extract_price(product: dict[str, Any]) -> dict | None:
     """Parse a Sainsbury's product dict and return a normalised price dict, or None on failure."""
     retail_price = product.get("retail_price")
     if retail_price is None:
@@ -74,8 +75,9 @@ def get_price(barcode: str, name: str, brand: str, weight_g: float) -> dict | No
 
     Returns:
         {
-            "price_pence": int,
-            "price_type": str,  # "unit" or "per_kg"
+            "price_pence": int,        # e.g. 110
+            "price_type": str,         # "unit" or "per_kg"
+            "product_url": str | None  # e.g. "https://www.sainsburys.co.uk/gol-ui/product/..."
         }
         or None if no match found.
     """
@@ -92,7 +94,7 @@ def get_price(barcode: str, name: str, brand: str, weight_g: float) -> dict | No
                 "page_number": page,
                 "page_size": _PAGE_SIZE,
                 "sort_order": "FAVOURITES_FIRST",
-            },
+            },  # type: ignore[arg-type]
             timeout=_TIMEOUT,
         )
 
@@ -111,15 +113,21 @@ def get_price(barcode: str, name: str, brand: str, weight_g: float) -> dict | No
                 continue
             if _ean_matches(barcode, product["eans"]):
                 logging.debug(f"Sainsbury's: found EAN match on page {page} for barcode {barcode}")
-                return _extract_price(product)
+                price = _extract_price(product)
+                if price is not None:
+                    url = product.get("full_url") or None
+                    if url and url.startswith("://"):
+                        url = "https" + url
+                    # Reject any non-http(s) scheme before storing — a hostile
+                    # API response must not be able to inject e.g. a javascript:
+                    # URL that later reaches an anchor href in the frontend.
+                    if url and not url.startswith(("https://", "http://")):
+                        url = None
+                    price["product_url"] = url
+                return price
 
         if page < _MAX_PAGES:
             time.sleep(_INTER_PAGE_SLEEP)
 
     logging.warning(f"Sainsbury's: no EAN match after {_MAX_PAGES} pages for barcode {barcode}")
     return None
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
-    print(get_price("00485081", "Mixed beans in mild chilli sauce", "Sainsbury's", 395))
-    

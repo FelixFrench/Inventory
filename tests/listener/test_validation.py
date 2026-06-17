@@ -1,3 +1,5 @@
+"""Tests for src/listener/validation.py — barcode format validation."""
+
 import pytest
 
 from src.listener.validation import is_valid_barcode

@@ -17,7 +17,7 @@ def _get_headers() -> dict:
         email = os.environ.get("OFF_CONTACT_EMAIL")
         if not email:
             raise RuntimeError("OFF_CONTACT_EMAIL not set in config.local.env")
-        _headers = {"User-Agent": f"FFInventory/1.0 ({email})"}
+        _headers = {"User-Agent": f"FFInventory/2.0.0 ({email})"}
     return _headers
 
 

@@ -1,0 +1,22 @@
+header { padding: 12px 16px; }
+nav { gap: 4px; padding: 0 8px; }
+nav a { padding: 10px 14px; font-size: 0.9rem; border-bottom: 3px solid transparent; }
+nav a.active { border-bottom-color: #4a9eff; }
+main { max-width: 1100px; }
+
+table { border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+thead th { background: #2a2a2a; padding: 10px 14px; text-transform: none; letter-spacing: 0; white-space: nowrap; }
+tbody td { padding: 10px 14px; font-size: 0.9rem; vertical-align: middle; border-bottom: none; }
+tbody tr:nth-child(even) { background: #f9f9f9; }
+tr:hover td { background: inherit; }
+
+.status-msg { color: #555; font-size: 0.95rem; }
+.barcode-fallback { font-family: monospace; color: #888; font-size: 0.85rem; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
+.badge--pending       { background: #e0e0e0; color: #555; font-style: italic; }
+.badge--failed        { background: #c0392b; color: #fff; }
+.badge--not-attempted { background: #e67e22; color: #fff; }
+.badge--no-data       { background: #555;    color: #fff; }
+.badge--missing       { background: #f39c12; color: #fff; }
+.badge--per-kg        { background: #8e44ad; color: #fff; }
+.badge--active-session { background: #2980b9; color: #fff; }

@@ -1,0 +1,5 @@
+th.shortfall-col, td.shortfall-col { text-align: center; }
+.shortfall-badge { display: inline-block; background: #c0392b; color: #fff; font-weight: 700; font-size: 1.1rem; border-radius: 50%; width: 36px; height: 36px; line-height: 36px; text-align: center; }
+.min-qty-link { margin-bottom: 16px; font-size: 0.9rem; }
+.min-qty-link a { color: #1a73e8; text-decoration: none; }
+.min-qty-link a:hover { text-decoration: underline; }

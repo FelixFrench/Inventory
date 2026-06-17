@@ -1,0 +1,71 @@
+nav { flex-shrink: 0; }
+main { padding: 0; position: relative; }
+
+/* Status banner */
+#banner { display: flex; align-items: center; justify-content: space-between; padding: 10px 20px; font-size: 0.95rem; font-weight: 600; flex-shrink: 0; }
+.banner-idle { background: #F5F5F5; color: #1a1a1a; border-bottom: 1px solid #e0e0e0; }
+.banner-in   { background: #E4F3E4; color: #2A5E2A; }
+.banner-out  { background: #FAECE7; color: #993C1D; }
+#btn-end-session { background: #3B6D11; color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 0.85rem; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.banner-out #btn-end-session { background: #993C1D; }
+
+/* No-session start buttons */
+#no-session { padding: 24px 16px; display: flex; flex-direction: column; gap: 12px; }
+#btn-start-in  { background: #3B6D11; color: #fff; border: none; border-radius: 10px; padding: 18px; font-size: 1rem; font-weight: 600; width: 100%; cursor: pointer; }
+#btn-start-out { background: #993C1D; color: #fff; border: none; border-radius: 10px; padding: 18px; font-size: 1rem; font-weight: 600; width: 100%; cursor: pointer; }
+
+/* Feed list */
+#feed-list { list-style: none; }
+.feed-row { background: #fff; border-bottom: 1px solid #e8e8e8; padding: 12px 16px; }
+.feed-row-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.feed-item-name { font-size: 0.95rem; font-weight: 500; }
+.feed-delta-in  { font-size: 0.9rem; font-weight: 700; color: #3B6D11; flex-shrink: 0; }
+.feed-delta-out { font-size: 0.9rem; font-weight: 700; color: #993C1D; flex-shrink: 0; }
+.feed-item-meta { font-size: 0.82rem; color: #666; margin-top: 3px; }
+.feed-item-qty  { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.feed-item-qty button { width: 28px; height: 28px; border: 1px solid #ddd; border-radius: 4px; background: #f5f5f5; color: #555; font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.feed-item-qty button:disabled { color: #bbb; cursor: not-allowed; }
+.feed-item-qty .qty-count { min-width: 24px; text-align: center; font-size: 0.9rem; font-weight: 600; }
+.feed-row-right { display: flex; flex-direction: column; align-items: flex-end; }
+.feed-item-stock { font-size: 0.75rem; color: #888; }
+.feed-row--warning { border-left: 3px solid #993C1D; background-color: #FAECE7; }
+.feed-row--warning .feed-item-stock { color: #993C1D; }
+
+.italic-muted { color: #aaa; font-style: italic; }
+
+/* Dim overlay (inside main, covers content only) */
+#dim-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.35); z-index: 1; pointer-events: none; display: none; }
+#dim-overlay.visible { display: block; }
+
+/* End-session strip (fixed bottom) */
+#end-strip { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #ddd; padding: 16px 20px; z-index: 20; display: none; }
+#end-strip.visible { display: block; }
+.strip-summary { font-size: 0.9rem; color: #333; margin-bottom: 12px; }
+.strip-buttons { display: flex; gap: 10px; }
+#btn-confirm { flex: 2; background: #3B6D11; color: #fff; border: none; border-radius: 8px; padding: 12px; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+#btn-confirm:disabled { background: #ccc; color: #888; cursor: not-allowed; }
+#btn-discard { flex: 1; background: #f0f0f0; color: #333; border: 1px solid #ccc; border-radius: 8px; padding: 12px; font-size: 0.9rem; cursor: pointer; }
+#strip-error { display: none; color: #c0392b; font-size: 0.85rem; margin-top: 8px; }
+#strip-error.visible { display: block; }
+
+/* Discard modal */
+#discard-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 30; align-items: center; justify-content: center; }
+#discard-modal.visible { display: flex; }
+
+/* Would-go-negative modal */
+#negative-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 30; align-items: center; justify-content: center; }
+#negative-modal.visible { display: flex; }
+
+/* Shared modal styles */
+.modal { background: #fff; border-radius: 12px; padding: 20px 16px; width: min(90%, 400px); box-shadow: 0 4px 24px rgba(0,0,0,0.25); }
+.modal-title { font-size: 1rem; font-weight: 700; margin-bottom: 10px; }
+.modal-body  { font-size: 0.875rem; color: #555; line-height: 1.5; margin-bottom: 16px; }
+.modal-buttons { display: flex; gap: 8px; }
+#btn-yes-discard { flex: 1; background: #FAECE7; color: #993C1D; border: 1px solid #993C1D; border-radius: 8px; padding: 10px 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+#btn-keep { flex: 1; background: #f0f0f0; color: #333; border: 1px solid #ccc; border-radius: 8px; padding: 10px 6px; font-size: 0.85rem; cursor: pointer; }
+.negative-item { font-size: 0.85rem; padding: 4px 0; border-bottom: 1px solid #eee; }
+#btn-close-negative { margin-top: 12px; width: 100%; background: #1a1a1a; color: #fff; border: none; border-radius: 8px; padding: 10px; font-size: 0.9rem; cursor: pointer; }
+
+/* Recovery toast */
+#toast { display: none; position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: #1a1a1a; color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 0.875rem; z-index: 40; white-space: nowrap; cursor: pointer; }
+#toast.visible { display: block; }

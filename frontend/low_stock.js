@@ -1,7 +1,4 @@
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
+// esc() lives in shared-utils.js (loaded before this script).
 
 function render(data) {
   const el = document.getElementById('content');
@@ -31,8 +28,8 @@ function render(data) {
             <tbody>${rows}</tbody>
           </table>`;
   }
-  document.getElementById('loading').style.display = 'none';
-  el.style.display = '';
+  document.getElementById('loading').classList.add('hidden');
+  el.classList.remove('hidden');
 }
 
 (async function init() {
@@ -41,9 +38,54 @@ function render(data) {
     if (!resp.ok) throw new Error('Server error ' + resp.status);
     render(await resp.json());
   } catch (e) {
-    document.getElementById('loading').style.display = 'none';
+    document.getElementById('loading').classList.add('hidden');
     const err = document.getElementById('error-msg');
     err.textContent = 'Could not load low stock report. Check connection.';
-    err.style.display = '';
+    err.classList.remove('hidden');
   }
 })();
+
+let _activeToast = null;
+
+function showToast(message, type) {
+    if (_activeToast) {
+        _activeToast.remove();
+        _activeToast = null;
+    }
+    const toast = document.createElement('div');
+    toast.className = `toast toast--${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    _activeToast = toast;
+    setTimeout(() => {
+        toast.remove();
+        if (_activeToast === toast) _activeToast = null;
+    }, 4000);
+}
+
+document.getElementById('print-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('print-btn');
+    const report = btn.dataset.report;
+
+    btn.disabled = true;
+
+    try {
+        const res = await fetch(`/print/${report}`, {
+            method: 'POST',
+            headers: { 'X-API-Key': API_KEY }
+        });
+        if (res.ok) {
+            showToast('Sent to printer ✓', 'ok');
+        } else {
+            const body = await res.json().catch(() => ({}));
+            const msg = body.error === 'printer_not_configured'
+                ? 'Printer not configured'
+                : 'Printer unavailable';
+            showToast(msg, 'error');
+        }
+    } catch {
+        showToast('Printer unavailable', 'error');
+    } finally {
+        btn.disabled = false;
+    }
+});

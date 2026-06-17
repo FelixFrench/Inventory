@@ -1,3 +1,5 @@
+"""Global pytest configuration — mocks evdev for cross-platform compatibility."""
+
 import sys
 from unittest.mock import MagicMock
 

@@ -19,7 +19,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade():
     from pathlib import Path
-    schema = (Path(__file__).parent.parent.parent / "schema.sql").read_text()
+    schema = (Path(__file__).parent.parent.parent / "initial_schema.sql").read_text()
 
     # Strip line comments before splitting on ; — some comments contain semicolons
     # which would cause the naive split to produce malformed statements.

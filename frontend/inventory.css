@@ -1,0 +1,2 @@
+th:last-child, td:last-child { text-align: right; }
+.empty { color: #666; background: none; border: none; padding: 40px 0; }
