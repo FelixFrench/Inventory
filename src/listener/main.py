@@ -1,16 +1,15 @@
 import logging
 import os
 import time
-
-logger = logging.getLogger(__name__)
+from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
 
 from src.listener.scanner import find_scanner, read_barcodes
 from src.listener.validation import is_valid_barcode
 
-from pathlib import Path
-from dotenv import load_dotenv
+logger = logging.getLogger(__name__)
 
 FASTAPI_URL              = os.environ.get("INVENTORY_API_URL", "http://127.0.0.1:8000/scan")
 RECONNECT_INITIAL_DELAY  = 2
