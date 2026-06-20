@@ -13,7 +13,7 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, weight_g REAL, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL, started_at TEXT NOT NULL, recovered_at TEXT);
@@ -263,10 +263,10 @@ def _seed_barcode(db, barcode):
     db.commit()
 
 
-def _seed_pv(db, barcode, name=None, brand=None, weight_g=None):
+def _seed_pv(db, barcode, name=None, brand=None, product_quantity=None):
     db.execute(
-        "INSERT INTO product_variants (barcode, retailer_id, name, brand, weight_g) VALUES (?, ?, ?, ?, ?)",
-        (barcode, _RETAILER_ID, name, brand, weight_g),
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity) VALUES (?, ?, ?, ?, ?)",
+        (barcode, _RETAILER_ID, name, brand, product_quantity),
     )
     db.commit()
 
@@ -326,7 +326,7 @@ def test_unresolved_no_pv_row(client, db):
 def test_unresolved_missing_name(client, db):
     bc = _BC(2)
     _seed_barcode(db, bc)
-    _seed_pv(db, bc, name=None, brand="Heinz", weight_g=400)
+    _seed_pv(db, bc, name=None, brand="Heinz", product_quantity="400g")
 
     resp = client.get("/reports/unresolved")
     assert resp.status_code == 200
@@ -341,7 +341,7 @@ def test_unresolved_missing_name(client, db):
 def test_unresolved_missing_price(client, db):
     bc = _BC(3)
     _seed_barcode(db, bc)
-    _seed_pv(db, bc, name="Beans", brand="Heinz", weight_g=415)
+    _seed_pv(db, bc, name="Beans", brand="Heinz", product_quantity="415g")
     # no prices row
 
     resp = client.get("/reports/unresolved")
@@ -353,7 +353,7 @@ def test_unresolved_missing_price(client, db):
 def test_unresolved_per_kg(client, db):
     bc = _BC(4)
     _seed_barcode(db, bc)
-    _seed_pv(db, bc, name="Loose Apples", brand="Farms", weight_g=None)
+    _seed_pv(db, bc, name="Loose Apples", brand="Farms", product_quantity=None)
     _seed_price(db, bc, price_pence=None, price_type='per_kg')
 
     resp = client.get("/reports/unresolved")
@@ -367,7 +367,7 @@ def test_unresolved_per_kg(client, db):
 def test_unresolved_fully_resolved_excluded(client, db):
     bc = _BC(5)
     _seed_barcode(db, bc)
-    _seed_pv(db, bc, name="Oat Milk", brand="Oatly", weight_g=1000)
+    _seed_pv(db, bc, name="Oat Milk", brand="Oatly", product_quantity="1kg")
     _seed_price(db, bc, price_pence=150)
 
     resp = client.get("/reports/unresolved")
@@ -379,7 +379,7 @@ def test_unresolved_fully_resolved_excluded(client, db):
 def test_unresolved_price_value_formatting(client, db):
     bc = _BC(6)
     _seed_barcode(db, bc)
-    _seed_pv(db, bc, name=None, brand=None, weight_g=None)
+    _seed_pv(db, bc, name=None, brand=None, product_quantity=None)
     _seed_price(db, bc, price_pence=110)
 
     resp = client.get("/reports/unresolved")
@@ -422,7 +422,7 @@ def test_unresolved_session_failed_not_possible(client, db):
 def test_unresolved_session_resolved_info_price_pending(client, db):
     bc = _BC(9)
     _seed_barcode(db, bc)
-    _seed_pv(db, bc, name="Milk", brand="Arla", weight_g=2000)
+    _seed_pv(db, bc, name="Milk", brand="Arla", product_quantity="2kg")
     _seed_session(db)
     _seed_session_item(db, bc, info_status='resolved', price_status='pending')
 
@@ -438,7 +438,7 @@ def test_unresolved_session_resolved_info_price_pending(client, db):
 def test_unresolved_session_failed_overrides_existing_pv(client, db):
     bc = _BC(10)
     _seed_barcode(db, bc)
-    _seed_pv(db, bc, name="Old Name", brand="Old Brand", weight_g=500)
+    _seed_pv(db, bc, name="Old Name", brand="Old Brand", product_quantity="500g")
     _seed_session(db)
     _seed_session_item(db, bc, info_status='failed', price_status='not_possible')
 
@@ -479,7 +479,7 @@ def test_unresolved_inventory_quantity_zero_when_absent(client, db):
 def test_unresolved_inventory_quantity_from_row(client, db):
     bc = _BC(14)
     _seed_barcode(db, bc)
-    _seed_pv(db, bc, name=None, brand=None, weight_g=None)
+    _seed_pv(db, bc, name=None, brand=None, product_quantity=None)
     db.execute(
         "INSERT INTO inventory (barcode, quantity) VALUES (?, 5)", (bc,)
     )
@@ -554,7 +554,7 @@ def test_unresolved_off_url_add_when_no_pv_row(client, db):
 def test_unresolved_off_url_view_when_name_present(client, db):
     bc = _BC(21)
     _seed_barcode(db, bc)
-    _seed_pv(db, bc, name="Milk", brand=None, weight_g=None)
+    _seed_pv(db, bc, name="Milk", brand=None, product_quantity=None)
 
     resp = client.get("/reports/unresolved")
     item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
@@ -564,7 +564,7 @@ def test_unresolved_off_url_view_when_name_present(client, db):
 def test_unresolved_price_url_none_when_no_product_url(client, db):
     bc = _BC(22)
     _seed_barcode(db, bc)
-    _seed_pv(db, bc, name=None, brand=None, weight_g=None)
+    _seed_pv(db, bc, name=None, brand=None, product_quantity=None)
     _seed_price(db, bc, price_pence=110)
 
     resp = client.get("/reports/unresolved")
@@ -575,7 +575,7 @@ def test_unresolved_price_url_none_when_no_product_url(client, db):
 def test_unresolved_price_url_present_when_set(client, db):
     bc = _BC(23)
     _seed_barcode(db, bc)
-    _seed_pv(db, bc, name=None, brand=None, weight_g=None)
+    _seed_pv(db, bc, name=None, brand=None, product_quantity=None)
     url = "https://www.sainsburys.co.uk/gol-ui/product/test"
     _seed_price(db, bc, price_pence=110, product_url=url)
 

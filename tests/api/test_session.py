@@ -14,7 +14,7 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, weight_g REAL, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
@@ -90,7 +90,7 @@ def _start_session(client, session_type="in"):
 
 def _seed_item(db, barcode, session_id, delta=1,
                info_status="pending", price_status="pending",
-               name=None, brand=None, weight_g=None, price_pence=None, product_url=None):
+               name=None, brand=None, product_quantity=None, price_pence=None, product_url=None):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
     db.execute(
         "INSERT INTO session_items (session_id, barcode, delta, info_status, price_status, first_scanned_at) "
@@ -99,9 +99,9 @@ def _seed_item(db, barcode, session_id, delta=1,
     )
     if name is not None:
         db.execute(
-            "INSERT OR IGNORE INTO product_variants (barcode, retailer_id, name, brand, weight_g) "
+            "INSERT OR IGNORE INTO product_variants (barcode, retailer_id, name, brand, product_quantity) "
             "VALUES (?, ?, ?, ?, ?)",
-            (barcode, _RETAILER_ID, name, brand, weight_g)
+            (barcode, _RETAILER_ID, name, brand, product_quantity)
         )
     if price_pence is not None:
         db.execute(
@@ -161,7 +161,7 @@ def test_get_session_with_items(client, db):
     session_id = _start_session(client, "in")
     _seed_item(db, _BARCODE, session_id, delta=2,
                info_status="resolved", price_status="resolved",
-               name="Baked Beans", brand="Heinz", weight_g=415.0, price_pence=123)
+               name="Baked Beans", brand="Heinz", product_quantity="415g", price_pence=123)
 
     resp = client.get("/session")
     assert resp.status_code == 200
@@ -178,12 +178,10 @@ def test_get_session_with_items(client, db):
 
 
 def test_get_session_weight_kilograms(client, db):
-    # >= 1000 g must format as kg, matching the WS feed and reports (Issue 3 fix:
-    # GET /session now uses the shared format_weight instead of an inline "Ng").
     session_id = _start_session(client, "in")
     _seed_item(db, _BARCODE, session_id, delta=1,
                info_status="resolved", price_status="resolved",
-               name="Plain Flour", brand="Allinson", weight_g=1500.0, price_pence=200)
+               name="Plain Flour", brand="Allinson", product_quantity="1.5kg", price_pence=200)
 
     resp = client.get("/session")
     assert resp.status_code == 200
@@ -401,7 +399,7 @@ def test_discard_then_worker_writeback_keeps_data_rows(client, db):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
     db.commit()
 
-    result = {"name": "Baked Beans", "brand": "Heinz", "weight_g": 415.0}
+    result = {"name": "Baked Beans", "brand": "Heinz", "product_quantity": "415g"}
 
     with patch("src.worker.main.get_connection", MagicMock(return_value=_NocloseConn(db))):
         rowcount = _phase1_success(_BARCODE, session_id, _RETAILER_ID, result)
@@ -603,7 +601,7 @@ def test_get_session_item_off_url_view_when_resolved(client, db):
     session_id = _start_session(client, "in")
     _seed_item(db, _BARCODE, session_id, delta=1,
                info_status="resolved", price_status="resolved",
-               name="Baked Beans", brand="Heinz", weight_g=415.0, price_pence=123)
+               name="Baked Beans", brand="Heinz", product_quantity="415g", price_pence=123)
 
     resp = client.get("/session")
     item = resp.json()["session"]["items"][0]
@@ -624,7 +622,7 @@ def test_get_session_item_price_url_none_when_absent(client, db):
     session_id = _start_session(client, "in")
     _seed_item(db, _BARCODE, session_id, delta=1,
                info_status="resolved", price_status="resolved",
-               name="Baked Beans", brand="Heinz", weight_g=415.0, price_pence=123)
+               name="Baked Beans", brand="Heinz", product_quantity="415g", price_pence=123)
 
     resp = client.get("/session")
     item = resp.json()["session"]["items"][0]
@@ -636,7 +634,7 @@ def test_get_session_item_price_url_present_when_set(client, db):
     url = "https://www.sainsburys.co.uk/gol-ui/product/baked-beans"
     _seed_item(db, _BARCODE, session_id, delta=1,
                info_status="resolved", price_status="resolved",
-               name="Baked Beans", brand="Heinz", weight_g=415.0,
+               name="Baked Beans", brand="Heinz", product_quantity="415g",
                price_pence=123, product_url=url)
 
     resp = client.get("/session")

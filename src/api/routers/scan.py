@@ -43,7 +43,7 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
                 check = conn.execute(
                     """
                     SELECT
-                        pv.name, pv.brand, pv.weight_g, pr.price_pence, pr.product_url,
+                        pv.name, pv.brand, pv.product_quantity, pr.price_pence, pr.product_url,
                         (pv.barcode IS NOT NULL) AS has_info,
                         (pr.barcode IS NOT NULL) AS has_price,
                         COALESCE(inv.quantity, 0) AS inventory_quantity
@@ -94,7 +94,7 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
                 "price_status": price_status,
                 "name": check["name"],
                 "brand": check["brand"],
-                "weight_g": check["weight_g"],
+                "product_quantity": check["product_quantity"],
                 "price_pence": check["price_pence"],
                 "product_url": check["product_url"],
                 "inventory_quantity": check["inventory_quantity"],
