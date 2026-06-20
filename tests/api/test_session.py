@@ -272,6 +272,26 @@ def test_confirm_blocked_by_price_pending(client, db):
     assert resp.json()["detail"]["error"] == "lookups_pending"
 
 
+def test_confirm_pending_check_inside_transaction(client, db):
+    """Pending row present when transaction opens → 409, no inventory write, session preserved."""
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=3,
+               info_status="pending", price_status="pending")
+
+    resp = client.post("/session/confirm")
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["error"] == "lookups_pending"
+    assert detail["pending_count"] == 1
+
+    assert db.execute(
+        "SELECT quantity FROM inventory WHERE barcode = ?", (_BARCODE,)
+    ).fetchone() is None
+    assert db.execute(
+        "SELECT id FROM sessions WHERE id = ?", (session_id,)
+    ).fetchone() is not None
+
+
 # ---------------------------------------------------------------------------
 # Test 13: Scan-out would go negative
 # ---------------------------------------------------------------------------

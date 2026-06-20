@@ -185,19 +185,20 @@ def confirm_session(retailer_id: int = Depends(get_retailer_id)) -> ConfirmRespo
             session_id = session_row['id']
             session_type = session_row['type']
 
-            pending_count = conn.execute(
-                "SELECT COUNT(*) FROM session_items "
-                "WHERE session_id = ? AND (info_status = 'pending' OR price_status = 'pending')",
-                (session_id,)
-            ).fetchone()[0]
-            if pending_count > 0:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"error": "lookups_pending", "pending_count": pending_count}
-                )
-
             conn.execute("BEGIN IMMEDIATE")
             try:
+                pending_count = conn.execute(
+                    "SELECT COUNT(*) FROM session_items "
+                    "WHERE session_id = ? AND (info_status = 'pending' OR price_status = 'pending')",
+                    (session_id,)
+                ).fetchone()[0]
+                if pending_count > 0:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"error": "lookups_pending", "pending_count": pending_count}
+                    )
+
                 if session_type == "out":
                     negative_rows = conn.execute(
                         """
