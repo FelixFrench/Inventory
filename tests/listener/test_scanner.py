@@ -165,7 +165,7 @@ def test_read_barcodes_oserror_propagates():
 # ---------------------------------------------------------------------------
 
 @patch("src.listener.main.INVENTORY_API_KEY", "test-api-key")
-@patch("src.listener.main.httpx.post")
+@patch("src.listener.main.requests.post")
 def test_post_scan_success(mock_post):
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -182,7 +182,7 @@ def test_post_scan_success(mock_post):
 
 
 @patch("src.listener.main.INVENTORY_API_KEY", None)
-@patch("src.listener.main.httpx.post")
+@patch("src.listener.main.requests.post")
 def test_post_scan_with_no_api_key(mock_post):
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -198,15 +198,15 @@ def test_post_scan_with_no_api_key(mock_post):
     )
 
 
-@patch("src.listener.main.httpx.post")
+@patch("src.listener.main.requests.post")
 def test_post_scan_network_error(mock_post):
-    import httpx
-    mock_post.side_effect = httpx.RequestError("connection refused")
+    import requests
+    mock_post.side_effect = requests.exceptions.ConnectionError("connection refused")
 
     post_scan("12345678")  # must not raise
 
 
-@patch("src.listener.main.httpx.post")
+@patch("src.listener.main.requests.post")
 def test_post_scan_non_2xx(mock_post):
     mock_response = MagicMock()
     mock_response.status_code = 500
