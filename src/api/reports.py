@@ -84,7 +84,7 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
         weight_label = _label_for_info_field(row['info_status'], has_pv, row['weight_g'])
         price_label  = _label_for_price(row['price_status'], has_pr, row['price_pence'])
 
-        if all(l == 'resolved' for l in [name_label, brand_label, weight_label, price_label]):
+        if all(label == 'resolved' for label in [name_label, brand_label, weight_label, price_label]):
             continue
 
         price_value = round(row['price_pence'] / 100, 2) if row['price_pence'] is not None else None

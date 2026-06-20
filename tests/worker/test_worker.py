@@ -1,10 +1,8 @@
 """Tests for src/worker/main.py — OFF/Sainsbury's write-back, worker state, poll priority."""
 
 import sqlite3
-import time
 from datetime import datetime, timedelta, UTC
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -13,7 +11,6 @@ from src.worker.main import (
     _compute_startup_sleep,
     _phase1_failure,
     _phase1_success,
-    _phase2_failure,
     _phase2_success,
     _poll_forever,
 )
@@ -287,8 +284,6 @@ def test_poll1_info_pending_is_processed_first(db):
     with patch("src.worker.main.get_connection", _make_get_connection(db)), \
          patch("src.worker.off.lookup_barcode", return_value=_GOOD_OFF), \
          patch("src.worker.sainsburys.get_price", return_value=_GOOD_PRICE):
-        from src.worker import main as worker_main
-
         poll1 = db.execute(
             "SELECT barcode, session_id FROM session_items "
             "WHERE info_status = 'pending' "

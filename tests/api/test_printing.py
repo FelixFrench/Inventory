@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from starlette.testclient import TestClient
 
-from src.api import printer as printer_mod
 from src.api.dependencies import get_db, verify_api_key
 from src.api.main import app
 from src.api.printer import PrinterUnavailableError, _format_inventory, _format_low_stock, _get_printer
