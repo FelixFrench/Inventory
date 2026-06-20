@@ -13,7 +13,7 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, weight_g REAL, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, weight_g REAL, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
@@ -80,8 +80,8 @@ def test_get_minimum_quantities_ordered(client, db):
         INSERT INTO inventory (barcode, quantity, minimum_quantity) VALUES ('1111111111111', 3, 2);
         INSERT INTO inventory (barcode, quantity, minimum_quantity) VALUES ('2222222222222', 1, 1);
         INSERT INTO inventory (barcode, quantity, minimum_quantity) VALUES ('3333333333333', 2, 0);
-        INSERT INTO product_variants VALUES ('1111111111111', 1, 'Baked Beans', 'Heinz', 415.0);
-        INSERT INTO product_variants VALUES ('2222222222222', 1, 'Apple Juice', 'Tropicana', 1000.0);
+        INSERT INTO product_variants VALUES ('1111111111111', 1, 'Baked Beans', 'Heinz', 415.0, '415g');
+        INSERT INTO product_variants VALUES ('2222222222222', 1, 'Apple Juice', 'Tropicana', 1000.0, '1kg');
     """)
     resp = client.get("/products/minimum-quantities")
     assert resp.status_code == 200
@@ -122,24 +122,24 @@ def test_get_minimum_quantities_coalesce_null(client, db):
     assert p["current_quantity"] == 5
 
 
-def test_get_minimum_quantities_weight_format_grams(client, db):
-    """weight_g < 1000 is formatted as integer grams."""
+def test_get_minimum_quantities_weight_grams(client, db):
+    """product_quantity string is returned verbatim."""
     db.executescript("""
         INSERT INTO barcodes VALUES ('1000000000001');
         INSERT INTO inventory (barcode) VALUES ('1000000000001');
-        INSERT INTO product_variants VALUES ('1000000000001', 1, 'Soup', 'Heinz', 415.0);
+        INSERT INTO product_variants VALUES ('1000000000001', 1, 'Soup', 'Heinz', 415.0, '415g');
     """)
     resp = client.get("/products/minimum-quantities")
     p = resp.json()["products"][0]
     assert p["weight"] == "415g"
 
 
-def test_get_minimum_quantities_weight_format_kg(client, db):
-    """weight_g >= 1000 is formatted as kg with one decimal place."""
+def test_get_minimum_quantities_weight_kg(client, db):
+    """product_quantity string is returned verbatim for kg products."""
     db.executescript("""
         INSERT INTO barcodes VALUES ('1000000000002');
         INSERT INTO inventory (barcode) VALUES ('1000000000002');
-        INSERT INTO product_variants VALUES ('1000000000002', 1, 'Milk', 'Arla', 1500.0);
+        INSERT INTO product_variants VALUES ('1000000000002', 1, 'Milk', 'Arla', 1500.0, '1.5kg');
     """)
     resp = client.get("/products/minimum-quantities")
     p = resp.json()["products"][0]

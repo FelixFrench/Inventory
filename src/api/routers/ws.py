@@ -1,6 +1,5 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from src.api.formatting import format_weight
 from src.api.urls import off_url as build_off_url
 
 router = APIRouter(tags=["WebSocket"])
@@ -44,7 +43,7 @@ SELECT si.barcode,
        si.price_status,
        pv.name,
        pv.brand,
-       pv.weight_g,
+       pv.product_quantity,
        pr.price_pence,
        pr.product_url
 FROM   session_items si
@@ -83,7 +82,7 @@ def build_payload(type_: str, row) -> dict:
     """Build wire payload from a DB row or dict.
 
     Row must provide keys: barcode, session_delta, info_status, price_status,
-    name, brand, weight_g, price_pence, product_url. Works with sqlite3.Row
+    name, brand, product_quantity, price_pence, product_url. Works with sqlite3.Row
     objects (which support dict-style access when row_factory = sqlite3.Row)
     and plain dicts.
     """
@@ -93,7 +92,7 @@ def build_payload(type_: str, row) -> dict:
     if info_wire == "resolved":
         name_val = row["name"]
         brand_val = row["brand"]
-        weight_val = format_weight(row["weight_g"])
+        weight_val = row["product_quantity"]
     else:
         name_val = brand_val = weight_val = None
 

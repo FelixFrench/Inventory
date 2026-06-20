@@ -1,7 +1,6 @@
 """OpenFoodFacts barcode lookup client."""
 
 import os
-import re
 from pathlib import Path
 
 import requests
@@ -21,23 +20,12 @@ def _get_headers() -> dict:
     return _headers
 
 
-def _parse_weight_string(s: str) -> float | None:
-    match = re.search(r"(\d+(?:\.\d+)?)\s*(g|kg)\b", s, re.IGNORECASE)
-    if not match:
-        return None
-    value = float(match.group(1))
-    unit = match.group(2).lower()
-    if unit == "kg":
-        value *= 1000
-    return value
-
-
 def lookup_barcode(barcode: str) -> dict | None:
     """
     Query OpenFoodFacts for product info.
 
     Returns:
-        {"name": str | None, "brand": str | None, "weight_g": float | None}
+        {"name": str | None, "brand": str | None, "product_quantity": str | None}
         or None if the product was not found (status != 1).
 
     Raises:
@@ -67,15 +55,21 @@ def lookup_barcode(barcode: str) -> dict | None:
     else:
         brand = None
 
-    weight_g = None
-    if "product_quantity" in product:
-        try:
-            weight_g = float(product["product_quantity"])
-        except (ValueError, TypeError):
-            pass
-    if weight_g is None:
-        raw = product.get("quantity", "")
-        if raw:
-            weight_g = _parse_weight_string(str(raw))
+    product_quantity = None
+    pq = product.get("product_quantity")
+    pqu = product.get("product_quantity_unit")
 
-    return {"name": name, "brand": brand, "weight_g": weight_g}
+    if pq is not None and str(pq) != "":
+        try:
+            qty_str = f"{pq:g}"
+        except (TypeError, ValueError):
+            qty_str = str(pq)
+        if pqu is not None and str(pqu).strip() != "":
+            product_quantity = f"{qty_str}{str(pqu).strip().lower()}"
+        else:
+            product_quantity = qty_str
+    else:
+        raw = product.get("quantity", "")
+        product_quantity = str(raw).strip() or None
+
+    return {"name": name, "brand": brand, "product_quantity": product_quantity}
