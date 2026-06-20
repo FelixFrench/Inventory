@@ -19,7 +19,7 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, weight_g REAL, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
@@ -305,8 +305,8 @@ def test_poll1_info_pending_is_processed_first(db):
 def test_poll2_only_runs_when_poll1_empty(db):
     _seed(db, info_status="resolved", price_status="pending")
     db.execute(
-        "INSERT INTO product_variants (barcode, retailer_id, name, brand, weight_g) "
-        "VALUES (?, ?, 'Baked Beans', 'Heinz', 415.0)",
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity) "
+        "VALUES (?, ?, 'Baked Beans', 'Heinz', '415g')",
         (_BARCODE, _RETAILER_ID)
     )
     db.commit()
@@ -318,7 +318,7 @@ def test_poll2_only_runs_when_poll1_empty(db):
 
     poll2 = db.execute(
         """
-        SELECT si.barcode, si.session_id, pv.name, pv.brand, pv.weight_g
+        SELECT si.barcode, si.session_id, pv.name, pv.brand, pv.product_quantity
         FROM session_items si
         LEFT JOIN product_variants pv ON pv.barcode = si.barcode AND pv.retailer_id = ?
         WHERE si.info_status = 'resolved' AND si.price_status = 'pending'

@@ -16,7 +16,7 @@ CREATE TABLE product_variants (
     retailer_id INTEGER NOT NULL REFERENCES retailers(id),
     name        TEXT,
     brand       TEXT,
-    weight_g    REAL, product_quantity TEXT,
+    product_quantity TEXT,
     PRIMARY KEY (barcode, retailer_id)
 );
 CREATE TABLE prices (
