@@ -269,7 +269,6 @@ Inventory/
 │   │   ├── dependencies.py     # get_db(), verify_api_key(), verify_docs_access(), get_retailer_id()
 │   │   ├── errors.py           # Shared DB-locked → 503 helper
 │   │   ├── urls.py             # OpenFoodFacts / Sainsbury's hyperlink builders
-│   │   ├── formatting.py       # Weight formatting (grams → "400g" / "1.5kg")
 │   │   ├── models.py           # Pydantic request/response models
 │   │   ├── printer.py          # ESC/POS receipt-printer client (TM-T88IV over TCP)
 │   │   ├── reports.py          # Report assembly (inventory / low-stock / unresolved)
@@ -284,7 +283,7 @@ Inventory/
 │   │   ├── db.py               # get_connection(); WAL + per-connection pragmas
 │   │   ├── initial_schema.sql  # Frozen baseline schema + seed data (run by initial migration)
 │   │   ├── current_schema.sql  # Documentation: schema after all migrations
-│   │   └── migrations/         # Alembic env + 3 migration scripts
+│   │   └── migrations/         # Alembic env + 5 migration scripts
 │   ├── listener/
 │   │   ├── main.py             # Run loop, reconnect, POSTs scans (httpx)
 │   │   ├── scanner.py          # evdev device enumeration + barcode reconstruction
@@ -299,6 +298,8 @@ Inventory/
 │   ├── docs-nav.js / .css      # API-docs link + login modal (calls /docs-login)
 │   ├── shared-utils.js         # esc() + sanitiseHref() (XSS-safe links)
 │   ├── config.example.js       # API key template (copy to config.js)
+│   ├── manifest.json           # Web app manifest (home-screen name, icons, theme)
+│   ├── icons/                  # App / favicon icons (192/384/512/1024 px)
 │   └── swagger-ui/             # Swagger UI assets (downloaded; gitignored)
 ├── systemd/
 │   ├── fastapi.service
@@ -306,10 +307,11 @@ Inventory/
 │   ├── worker.service
 │   └── 99-inventory-scanner.rules
 ├── scripts/
+│   ├── clear_products.sh            # Dev reset: clears cached product data + zero-qty inventory rows (Pi-only; uses systemctl)
 │   ├── download_swagger_assets.sh   # Fetch pinned Swagger UI assets (run once for /docs)
 │   ├── scan-sim.py                  # Dev barcode simulator → POST /scan
 │   └── wipe_db.sh                   # Stop services, delete DB, restart (dev only)
-├── tests/                      # 251 tests across api/, db/, listener/, worker/ (16 modules)
+├── tests/                      # 244 tests across api/, db/, listener/, worker/ (15 modules)
 ├── config.local.env            # Not committed — OFF_CONTACT_EMAIL, INVENTORY_API_KEY, PRINTER_IP
 ├── requirements.txt
 ├── alembic.ini
@@ -324,7 +326,7 @@ Inventory/
 pytest
 ```
 
-251 tests across all modules.
+244 tests across all modules.
 
 ---
 
@@ -387,6 +389,18 @@ python scripts/scan-sim.py
   that gap; the server returns no rate-limit headers)
 - The `scan_events` and `config` tables are legacy v1 carry-overs — present in the
   schema but unused by v2 code
+
+---
+
+## Upgrading from v2.0.x
+
+This is a backwards-compatible upgrade — no API contract or external behaviour changed. Run the database migrations to swap the stored product-quantity representation (the `weight_g` column is replaced by a `product_quantity` text column, with existing values backfilled):
+
+```bash
+alembic upgrade head
+```
+
+The API also runs migrations automatically on startup, so restarting the service has the same effect.
 
 ---
 
