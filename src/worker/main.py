@@ -33,9 +33,9 @@ def _phase1_success(barcode: str, session_id: int, retailer_id: int, result: dic
     try:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
-            "INSERT OR REPLACE INTO product_variants (barcode, retailer_id, name, brand, weight_g) "
+            "INSERT OR REPLACE INTO product_variants (barcode, retailer_id, name, brand, product_quantity) "
             "VALUES (?, ?, ?, ?, ?)",
-            (barcode, retailer_id, result['name'], result['brand'], result['weight_g'])
+            (barcode, retailer_id, result['name'], result['brand'], result['product_quantity'])
         )
         r = conn.execute(
             "UPDATE session_items SET info_status = 'resolved' "
@@ -172,7 +172,7 @@ def _poll_iteration(db: sqlite3.Connection, retailer_id: int) -> bool:
                 barcode=barcode,
                 name=result['name'],
                 brand=result['brand'],
-                weight_g=result['weight_g'],
+                product_quantity=result['product_quantity'],
             )
         except Exception as e:
             logger.warning(f"Barcode {barcode}: Sainsbury's error — {e}")
@@ -190,7 +190,7 @@ def _poll_iteration(db: sqlite3.Connection, retailer_id: int) -> bool:
     # Poll 2: price pending (only when Poll 1 found nothing)
     poll2 = db.execute(
         """
-        SELECT si.barcode, si.session_id, pv.name, pv.brand, pv.weight_g
+        SELECT si.barcode, si.session_id, pv.name, pv.brand, pv.product_quantity
         FROM   session_items si
         LEFT   JOIN product_variants pv ON pv.barcode = si.barcode AND pv.retailer_id = ?
         WHERE  si.info_status = 'resolved'
@@ -210,7 +210,7 @@ def _poll_iteration(db: sqlite3.Connection, retailer_id: int) -> bool:
                 barcode=barcode,
                 name=poll2['name'],
                 brand=poll2['brand'],
-                weight_g=poll2['weight_g'],
+                product_quantity=poll2['product_quantity'],
             )
         except Exception as e:
             logger.warning(f"Barcode {barcode}: Sainsbury's error — {e}")

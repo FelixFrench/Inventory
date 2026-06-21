@@ -1,4 +1,3 @@
-from src.api.formatting import format_weight
 from src.api.urls import off_url as build_off_url
 
 
@@ -40,7 +39,7 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
             pv.barcode                  AS pv_barcode,
             pv.name,
             pv.brand,
-            pv.weight_g,
+            pv.product_quantity,
             pr.barcode                  AS pr_barcode,
             pr.price_pence,
             pr.price_type,
@@ -60,7 +59,7 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
             pv.barcode     IS NULL
             OR pv.name     IS NULL
             OR pv.brand    IS NULL
-            OR pv.weight_g IS NULL
+            OR pv.product_quantity IS NULL
             OR pr.barcode  IS NULL
             OR pr.price_pence IS NULL
             OR si.info_status  = 'pending'
@@ -81,10 +80,10 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
 
         name_label   = _label_for_info_field(row['info_status'], has_pv, row['name'])
         brand_label  = _label_for_info_field(row['info_status'], has_pv, row['brand'])
-        weight_label = _label_for_info_field(row['info_status'], has_pv, row['weight_g'])
+        weight_label = _label_for_info_field(row['info_status'], has_pv, row['product_quantity'])
         price_label  = _label_for_price(row['price_status'], has_pr, row['price_pence'])
 
-        if all(l == 'resolved' for l in [name_label, brand_label, weight_label, price_label]):
+        if all(label == 'resolved' for label in [name_label, brand_label, weight_label, price_label]):
             continue
 
         price_value = round(row['price_pence'] / 100, 2) if row['price_pence'] is not None else None
@@ -94,7 +93,7 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
             "inventory_quantity": row['inventory_quantity'],
             "name":   {"value": row['name'],                  "label": name_label},
             "brand":  {"value": row['brand'],                 "label": brand_label},
-            "weight": {"value": format_weight(row['weight_g']), "label": weight_label},
+            "weight": {"value": row['product_quantity'], "label": weight_label},
             "price":  {"value": price_value,                  "label": price_label},
             "off_url":   build_off_url(row['barcode'], name=row['name']),
             "price_url": row['product_url'],

@@ -5,7 +5,7 @@ import pytest
 import requests
 
 import src.worker.off as off_module
-from src.worker.off import _get_headers, _parse_weight_string, lookup_barcode
+from src.worker.off import _get_headers, lookup_barcode
 
 
 def _make_response(data: dict) -> MagicMock:
@@ -19,36 +19,16 @@ def _product_response(**kwargs) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# _parse_weight_string
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "s,expected",
-    [
-        ("395g", 395.0),
-        ("400 g", 400.0),
-        ("1.5kg", 1500.0),
-        ("1 kg", 1000.0),
-        ("500ml", None),
-        ("not-a-weight", None),
-    ],
-)
-def test_parse_weight_string_variants(s, expected):
-    assert _parse_weight_string(s) == expected
-
-
-# ---------------------------------------------------------------------------
 # _get_headers lazy init
 # ---------------------------------------------------------------------------
 
 def test_get_headers_raises_if_env_missing():
     off_module._headers = None
-    # Patch load_dotenv to a no-op so it can't populate OFF_CONTACT_EMAIL from the .env file.
     with patch("src.worker.off.load_dotenv"), \
          patch.dict(os.environ, {}, clear=True):
         with pytest.raises(RuntimeError, match="OFF_CONTACT_EMAIL"):
             _get_headers()
-    off_module._headers = None  # reset for other tests
+    off_module._headers = None
 
 
 def test_get_headers_caches_result():
@@ -61,10 +41,24 @@ def test_get_headers_caches_result():
 
 
 # ---------------------------------------------------------------------------
-# lookup_barcode
+# lookup_barcode — product_quantity structured fields
 # ---------------------------------------------------------------------------
 
-def test_lookup_returns_name_brand_weight():
+def test_lookup_product_quantity_with_unit():
+    resp = _make_response(_product_response(
+        product_name="Red Kidney Beans",
+        brands="Sainsbury's",
+        product_quantity=500,
+        product_quantity_unit=" ML",
+    ))
+    with patch("requests.get", return_value=resp), \
+         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
+        off_module._headers = None
+        result = lookup_barcode("1234567890123")
+    assert result == {"name": "Red Kidney Beans", "brand": "Sainsbury's", "product_quantity": "500ml"}
+
+
+def test_lookup_product_quantity_no_unit():
     resp = _make_response(_product_response(
         product_name="Red Kidney Beans",
         brands="Sainsbury's",
@@ -74,8 +68,80 @@ def test_lookup_returns_name_brand_weight():
          patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
         off_module._headers = None
         result = lookup_barcode("1234567890123")
-    assert result == {"name": "Red Kidney Beans", "brand": "Sainsbury's", "weight_g": 400.0}
+    assert result["product_quantity"] == "400"
 
+
+def test_lookup_product_quantity_float_stripped():
+    resp = _make_response(_product_response(
+        product_name="Beans",
+        brands="Heinz",
+        product_quantity=415.0,
+        product_quantity_unit="g",
+    ))
+    with patch("requests.get", return_value=resp), \
+         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
+        off_module._headers = None
+        result = lookup_barcode("1234567890123")
+    assert result["product_quantity"] == "415g"
+
+
+def test_lookup_product_quantity_truncated_to_max_len():
+    # An anomalous OFF response whose assembled value exceeds the cap must be
+    # truncated to exactly _MAX_PQ_LEN chars before it reaches the DB.
+    resp = _make_response(_product_response(
+        product_name="Beans",
+        brands="Heinz",
+        product_quantity=500,
+        product_quantity_unit="m" * 100,
+    ))
+    with patch("requests.get", return_value=resp), \
+         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
+        off_module._headers = None
+        result = lookup_barcode("1234567890123")
+    assert len(result["product_quantity"]) == off_module._MAX_PQ_LEN
+    assert result["product_quantity"].startswith("500m")
+
+
+# ---------------------------------------------------------------------------
+# lookup_barcode — raw quantity string fallback
+# ---------------------------------------------------------------------------
+
+def test_lookup_quantity_from_raw_string():
+    resp = _make_response(_product_response(
+        product_name="Beans",
+        quantity="400 g",
+    ))
+    with patch("requests.get", return_value=resp), \
+         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
+        off_module._headers = None
+        result = lookup_barcode("1234567890123")
+    assert result["product_quantity"] == "400 g"
+
+
+def test_lookup_quantity_from_raw_kg_string():
+    resp = _make_response(_product_response(
+        product_name="Pasta",
+        quantity="1.5kg",
+    ))
+    with patch("requests.get", return_value=resp), \
+         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
+        off_module._headers = None
+        result = lookup_barcode("1234567890123")
+    assert result["product_quantity"] == "1.5kg"
+
+
+def test_lookup_quantity_null_when_both_absent():
+    resp = _make_response(_product_response(product_name="Beans"))
+    with patch("requests.get", return_value=resp), \
+         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
+        off_module._headers = None
+        result = lookup_barcode("1234567890123")
+    assert result["product_quantity"] is None
+
+
+# ---------------------------------------------------------------------------
+# lookup_barcode — name / brand / status
+# ---------------------------------------------------------------------------
 
 def test_lookup_returns_none_when_status_zero():
     resp = _make_response({"status": 0, "product": {}})
@@ -119,39 +185,6 @@ def test_lookup_brand_missing():
         off_module._headers = None
         result = lookup_barcode("1234567890123")
     assert result["brand"] is None
-
-
-def test_lookup_weight_from_quantity_string_fallback():
-    resp = _make_response(_product_response(
-        product_name="Beans",
-        quantity="400 g",
-    ))
-    with patch("requests.get", return_value=resp), \
-         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
-        off_module._headers = None
-        result = lookup_barcode("1234567890123")
-    assert result["weight_g"] == 400.0
-
-
-def test_lookup_weight_kg_conversion():
-    resp = _make_response(_product_response(
-        product_name="Pasta",
-        quantity="1.5kg",
-    ))
-    with patch("requests.get", return_value=resp), \
-         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
-        off_module._headers = None
-        result = lookup_barcode("1234567890123")
-    assert result["weight_g"] == 1500.0
-
-
-def test_lookup_weight_absent_both_fields():
-    resp = _make_response(_product_response(product_name="Beans"))
-    with patch("requests.get", return_value=resp), \
-         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
-        off_module._headers = None
-        result = lookup_barcode("1234567890123")
-    assert result["weight_g"] is None
 
 
 def test_lookup_propagates_request_exception():

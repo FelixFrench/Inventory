@@ -13,7 +13,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-kg pricing support for items currently stored with `price_pence = NULL` and flagged as per-kg.
 - Periodic price-cache refresh worker to keep prices current and to retry previously-failed lookups — this also resolves transient OpenFoodFacts / Sainsbury's errors that are currently recorded as permanent `failed` status.
 - Ambiguous barcode resolution: prompt the user to resolve a barcode that maps to different products across retailers (relevant once multi-retailer support lands).
-- Lint cleanup of pre-existing ruff findings: `E741` (ambiguous variable name) in `reports.py`, `E402` (imports not at top) in `listener/main.py`, and unused imports in `test_printing.py` and `test_worker.py`.
+
+## [2.1.0] - 2026-06-21
+
+### Added
+- Web app manifest (`frontend/manifest.json`) and home-screen icons, linked from every page, so the app can be added to a device home screen. Standalone (app-like) display and the automatic install prompt are only available where the app is served over HTTPS; over plain HTTP the manifest is ignored by browsers and this is a known limitation rather than a defect.
+- Favicon link (`/icons/icon-192.png`) on every page, resolving the browser favicon `404`.
+- `scripts/clear_products.sh`, a development-only reset tool that stops the services, clears cached product data not referenced by current inventory (prices, product variants, barcodes) along with any zero-quantity inventory rows, then restarts the services.
+
+### Changed
+- Product packaging quantity is now stored verbatim as text in `product_variants.product_quantity`, replacing the grams-only `weight_g` numeric column. Non-gram units are preserved as supplied by OpenFoodFacts (e.g. `"500ml"`, `"1.5kg"`) instead of being coerced to grams. The value is captured once at lookup time. The API response field that carries it is unchanged in name and shape (still a string).
+- Sainsbury's price-search queries now include the product's actual packaging unit rather than assuming grams, improving match rates for items measured by volume.
+
+### Fixed
+- Time-of-check/time-of-use race in `POST /session/confirm`: the pending-lookup gate is now re-checked inside the write transaction (with an explicit rollback before the `409`), closing a window where a concurrent `POST /scan` could be flushed unresolved. The `409` response shape is unchanged.
+- Sainsbury's price lookups that failed when the OpenFoodFacts unit and the Sainsbury's unit disagreed (e.g. `500g` vs `500ml`).
+- The `would_go_negative` branch of session confirm now rolls back its transaction explicitly before returning `409`, consistent with the pending-lookup gate.
+
+### Removed
+- `weight_g` column from `product_variants`, superseded by `product_quantity` (applied by migration).
+- `frontend/spike_c_mockup.html`, an obsolete design mockup.
+
+### Security
+- The OpenFoodFacts-sourced packaging-quantity value is now length-capped (64 characters) before it is written to the database, bounding an anomalous upstream response from writing an unbounded value.
 
 ## [2.0.0] - 2026-06-17
 

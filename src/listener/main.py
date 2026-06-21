@@ -1,16 +1,15 @@
 import logging
 import os
 import time
+from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
-import httpx
+import requests
+from dotenv import load_dotenv
 
 from src.listener.scanner import find_scanner, read_barcodes
 from src.listener.validation import is_valid_barcode
 
-from pathlib import Path
-from dotenv import load_dotenv
+logger = logging.getLogger(__name__)
 
 FASTAPI_URL              = os.environ.get("INVENTORY_API_URL", "http://127.0.0.1:8000/scan")
 RECONNECT_INITIAL_DELAY  = 2
@@ -23,10 +22,10 @@ INVENTORY_API_KEY = os.environ.get("INVENTORY_API_KEY")
 def post_scan(barcode: str) -> None:
     try:
         headers = {"X-API-Key": INVENTORY_API_KEY} if INVENTORY_API_KEY is not None else {}
-        response = httpx.post(FASTAPI_URL, json={"barcode": barcode}, headers=headers, timeout=5)
+        response = requests.post(FASTAPI_URL, json={"barcode": barcode}, headers=headers, timeout=5)
         if not (200 <= response.status_code < 300):
             logger.warning("POST %s returned HTTP %s", FASTAPI_URL, response.status_code)
-    except httpx.HTTPError as e:
+    except requests.exceptions.RequestException as e:
         logger.warning("POST %s failed: %s", FASTAPI_URL, e)
 
 

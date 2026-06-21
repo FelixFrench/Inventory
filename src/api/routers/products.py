@@ -6,7 +6,6 @@ from fastapi.responses import JSONResponse
 
 from src.api.dependencies import get_db
 from src.api.errors import SERVICE_UNAVAILABLE_503 as _503
-from src.api.formatting import format_weight
 from src.api.models import SetMinimumQuantityRequest
 
 logger = logging.getLogger(__name__)
@@ -31,7 +30,7 @@ def get_minimum_quantities(request: Request, db: sqlite3.Connection = Depends(ge
                 COALESCE(inv.minimum_quantity, 0) AS minimum_quantity,
                 pv.name,
                 pv.brand,
-                pv.weight_g
+                pv.product_quantity
             FROM inventory inv
             LEFT JOIN product_variants pv
                 ON pv.barcode = inv.barcode
@@ -45,7 +44,7 @@ def get_minimum_quantities(request: Request, db: sqlite3.Connection = Depends(ge
                 "barcode": row["barcode"],
                 "name": row["name"],
                 "brand": row["brand"],
-                "weight": format_weight(row["weight_g"]),
+                "weight": row["product_quantity"],
                 "current_quantity": row["current_quantity"],
                 "minimum_quantity": row["minimum_quantity"],
             }

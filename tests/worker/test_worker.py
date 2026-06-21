@@ -1,10 +1,8 @@
 """Tests for src/worker/main.py — OFF/Sainsbury's write-back, worker state, poll priority."""
 
 import sqlite3
-import time
 from datetime import datetime, timedelta, UTC
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -13,7 +11,6 @@ from src.worker.main import (
     _compute_startup_sleep,
     _phase1_failure,
     _phase1_success,
-    _phase2_failure,
     _phase2_success,
     _poll_forever,
 )
@@ -22,7 +19,7 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, weight_g REAL, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
@@ -36,7 +33,7 @@ INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:0
 _BARCODE = "5014788110140"
 _RETAILER_ID = 1
 _SESSION_ID = 1
-_GOOD_OFF = {"name": "Baked Beans", "brand": "Heinz", "weight_g": 415.0}
+_GOOD_OFF = {"name": "Baked Beans", "brand": "Heinz", "product_quantity": "415g"}
 _GOOD_PRICE = {"price_pence": 85, "price_type": "unit", "product_url": "https://www.sainsburys.co.uk/gol-ui/product/test"}
 _GOOD_PRICE_NO_URL = {"price_pence": 85, "price_type": "unit", "product_url": None}
 
@@ -287,8 +284,6 @@ def test_poll1_info_pending_is_processed_first(db):
     with patch("src.worker.main.get_connection", _make_get_connection(db)), \
          patch("src.worker.off.lookup_barcode", return_value=_GOOD_OFF), \
          patch("src.worker.sainsburys.get_price", return_value=_GOOD_PRICE):
-        from src.worker import main as worker_main
-
         poll1 = db.execute(
             "SELECT barcode, session_id FROM session_items "
             "WHERE info_status = 'pending' "
@@ -310,8 +305,8 @@ def test_poll1_info_pending_is_processed_first(db):
 def test_poll2_only_runs_when_poll1_empty(db):
     _seed(db, info_status="resolved", price_status="pending")
     db.execute(
-        "INSERT INTO product_variants (barcode, retailer_id, name, brand, weight_g) "
-        "VALUES (?, ?, 'Baked Beans', 'Heinz', 415.0)",
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity) "
+        "VALUES (?, ?, 'Baked Beans', 'Heinz', '415g')",
         (_BARCODE, _RETAILER_ID)
     )
     db.commit()
@@ -323,7 +318,7 @@ def test_poll2_only_runs_when_poll1_empty(db):
 
     poll2 = db.execute(
         """
-        SELECT si.barcode, si.session_id, pv.name, pv.brand, pv.weight_g
+        SELECT si.barcode, si.session_id, pv.name, pv.brand, pv.product_quantity
         FROM session_items si
         LEFT JOIN product_variants pv ON pv.barcode = si.barcode AND pv.retailer_id = ?
         WHERE si.info_status = 'resolved' AND si.price_status = 'pending'

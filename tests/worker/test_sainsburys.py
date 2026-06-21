@@ -1,7 +1,7 @@
 """Tests for src/worker/sainsburys.py — Sainsbury's price lookup and EAN matching."""
 
 from unittest.mock import patch, MagicMock
-from src.worker.sainsburys import get_price, _build_query, _ean_matches, _extract_price
+from src.worker.sainsburys import _build_query, _ean_matches, _extract_price, get_price
 
 
 # ---------------------------------------------------------------------------
@@ -44,21 +44,20 @@ def make_error_response(status_code):
 # ---------------------------------------------------------------------------
 
 class TestBuildQuery:
-    def test_whole_weight_formatted_as_integer(self):
-        result = _build_query("Sainsbury's", "Red Kidney Beans", 400.0)
+    def test_with_quantity_string(self):
+        result = _build_query("Sainsbury's", "Red Kidney Beans", "400g")
         assert result == "Sainsbury's Red Kidney Beans 400g"
 
-    def test_fractional_weight_formatted_with_decimal(self):
-        result = _build_query("Heinz", "Soup", 1500.5)
-        assert "1500.5g" in result
+    def test_none_quantity_omitted(self):
+        result = _build_query("Brand", "Name", None)
+        assert result == "Brand Name"
 
-    def test_large_whole_weight(self):
-        result = _build_query("Heinz", "Soup", 1000.0)
-        assert "1000g" in result
-        assert "1000.0g" not in result
+    def test_ml_quantity_included(self):
+        result = _build_query("Brand", "Name", "500ml")
+        assert result == "Brand Name 500ml"
 
     def test_brand_and_name_included(self):
-        result = _build_query("Heinz", "Baked Beans", 415.0)
+        result = _build_query("Heinz", "Baked Beans", "415g")
         assert result.startswith("Heinz Baked Beans")
 
 
@@ -162,7 +161,7 @@ class TestExtractPrice:
 BARCODE = "0000000171915"
 NAME = "Red Kidney Beans in Chilli Sauce"
 BRAND = "Sainsbury's"
-WEIGHT = 400.0
+WEIGHT = "400g"
 
 _MATCH = make_product(
     eans=[BARCODE],
@@ -283,7 +282,7 @@ class TestGetPrice:
         self._call()
         _, kwargs = mock_get.call_args
         params = kwargs["params"]
-        assert params["filter[keyword]"] == "Sainsbury's Red Kidney Beans in Chilli Sauce 400g"
+        assert params["filter[keyword]"] == "Sainsbury's Red Kidney Beans in Chilli Sauce 400g"  # WEIGHT="400g"
         assert params["page_number"] == 1
         assert params["page_size"] == 10
         assert params["sort_order"] == "FAVOURITES_FIRST"
@@ -312,7 +311,7 @@ class TestGetPrice:
 
     @patch("src.worker.sainsburys.time.sleep")
     @patch("src.worker.sainsburys.requests.get")
-    def test_none_weight_does_not_raise(self, mock_get, mock_sleep):
+    def test_none_product_quantity_does_not_raise(self, mock_get, mock_sleep):
         mock_get.side_effect = [make_response([_MATCH])]
         result = get_price(BARCODE, NAME, BRAND, None)
         assert result == {"price_pence": 110, "price_type": "unit", "product_url": None}

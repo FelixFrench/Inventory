@@ -17,15 +17,11 @@ _TIMEOUT = 10
 _INTER_PAGE_SLEEP = 0.5
 
 
-def _build_query(brand: str, name: str, weight_g: float) -> str:
+def _build_query(brand: str, name: str, product_quantity: str | None) -> str:
     """Return a search query string from product metadata, e.g. 'Heinz Baked Beans 415g'."""
-    if weight_g is None:
+    if product_quantity is None:
         return f"{brand} {name}"
-    if weight_g == int(weight_g):
-        weight_str = f"{int(weight_g)}g"
-    else:
-        weight_str = f"{weight_g:.1f}g"
-    return f"{brand} {name} {weight_str}"
+    return f"{brand} {name} {product_quantity}"
 
 
 def _ean_matches(barcode: str, eans: list[str]) -> bool:
@@ -63,15 +59,15 @@ def _extract_price(product: dict[str, Any]) -> dict | None:
     return None
 
 
-def get_price(barcode: str, name: str, brand: str, weight_g: float) -> dict | None:
+def get_price(barcode: str, name: str, brand: str, product_quantity: str | None) -> dict | None:
     """
     Search Sainsbury's for a product matching the given barcode.
 
     Args:
-        barcode:  EAN barcode string (e.g. "5014788110140")
-        name:     Product name from OpenFoodFacts (e.g. "Red Kidney Beans in Chilli Sauce")
-        brand:    Brand from OpenFoodFacts (e.g. "Sainsbury's")
-        weight_g: Weight in grams from OpenFoodFacts (e.g. 400.0)
+        barcode:          EAN barcode string (e.g. "5014788110140")
+        name:             Product name from OpenFoodFacts (e.g. "Red Kidney Beans in Chilli Sauce")
+        brand:            Brand from OpenFoodFacts (e.g. "Sainsbury's")
+        product_quantity: Quantity string from OpenFoodFacts (e.g. "400g", "500ml"), or None
 
     Returns:
         {
@@ -81,7 +77,7 @@ def get_price(barcode: str, name: str, brand: str, weight_g: float) -> dict | No
         }
         or None if no match found.
     """
-    query = _build_query(brand, name, weight_g)
+    query = _build_query(brand, name, product_quantity)
 
     for page in range(1, _MAX_PAGES + 1):
         logging.debug(f"Sainsbury's search: query='{query}' page={page}")

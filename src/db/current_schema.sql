@@ -1,19 +1,13 @@
--- current_schema.sql
---
--- Documentation: the complete database schema after all migrations have been
--- applied. Not read by any application or migration code.
---
--- Regenerate after adding a new migration:
---   sqlite3 path/to/inventory.db .schema > src/db/current_schema.sql
---
--- This file should be committed alongside each new migration so the current
--- schema is always readable without running the migrations.
-
+CREATE TABLE alembic_version (
+	version_num VARCHAR(32) NOT NULL, 
+	CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+);
 CREATE TABLE retailers (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     name         TEXT NOT NULL UNIQUE,
     scraper_class TEXT NOT NULL
 );
+CREATE TABLE sqlite_sequence(name,seq);
 CREATE TABLE barcodes (
     barcode TEXT PRIMARY KEY
 );
@@ -22,7 +16,7 @@ CREATE TABLE product_variants (
     retailer_id INTEGER NOT NULL REFERENCES retailers(id),
     name        TEXT,
     brand       TEXT,
-    weight_g    REAL,
+    product_quantity TEXT,
     PRIMARY KEY (barcode, retailer_id)
 );
 CREATE TABLE prices (

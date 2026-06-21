@@ -10,7 +10,6 @@ Usage:
     python scan_sim.py --url http://raspberrypi:8000/scan
 """
 
-import argparse
 import json
 import os
 import sys

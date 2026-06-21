@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.dependencies import get_retailer_id
-from src.api.formatting import format_weight
 from src.api.models import (
     ConfirmResponse,
     DeltaUpdateRequest,
@@ -44,7 +43,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
                si.first_scanned_at,
                pv.name,
                pv.brand,
-               pv.weight_g,
+               pv.product_quantity,
                pr.price_pence,
                pr.product_url,
                COALESCE(inv.quantity, 0) AS inventory_quantity
@@ -65,7 +64,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
             "failed" if r['price_status'] == "not_possible" else r['price_status']
         )
 
-        weight_val = format_weight(r['weight_g'])
+        weight_val = r['product_quantity']
         price_val = r['price_pence'] / 100 if r['price_pence'] is not None else None
 
         items.append({
@@ -185,19 +184,20 @@ def confirm_session(retailer_id: int = Depends(get_retailer_id)) -> ConfirmRespo
             session_id = session_row['id']
             session_type = session_row['type']
 
-            pending_count = conn.execute(
-                "SELECT COUNT(*) FROM session_items "
-                "WHERE session_id = ? AND (info_status = 'pending' OR price_status = 'pending')",
-                (session_id,)
-            ).fetchone()[0]
-            if pending_count > 0:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"error": "lookups_pending", "pending_count": pending_count}
-                )
-
             conn.execute("BEGIN IMMEDIATE")
             try:
+                pending_count = conn.execute(
+                    "SELECT COUNT(*) FROM session_items "
+                    "WHERE session_id = ? AND (info_status = 'pending' OR price_status = 'pending')",
+                    (session_id,)
+                ).fetchone()[0]
+                if pending_count > 0:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"error": "lookups_pending", "pending_count": pending_count}
+                    )
+
                 if session_type == "out":
                     negative_rows = conn.execute(
                         """
@@ -212,6 +212,7 @@ def confirm_session(retailer_id: int = Depends(get_retailer_id)) -> ConfirmRespo
                         (session_id,)
                     ).fetchall()
                     if negative_rows:
+                        conn.rollback()
                         raise HTTPException(
                             status_code=409,
                             detail={
