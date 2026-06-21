@@ -212,6 +212,7 @@ def confirm_session(retailer_id: int = Depends(get_retailer_id)) -> ConfirmRespo
                         (session_id,)
                     ).fetchall()
                     if negative_rows:
+                        conn.rollback()
                         raise HTTPException(
                             status_code=409,
                             detail={
