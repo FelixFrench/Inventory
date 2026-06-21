@@ -8,6 +8,11 @@ from dotenv import load_dotenv
 
 _headers: dict | None = None
 
+# Defensive cap on the externally-sourced product_quantity string before it is
+# stored. Real values are short ("400g", "500ml"); this bounds an anomalous OFF
+# response from writing an unbounded TEXT blob to the DB.
+_MAX_PQ_LEN = 64
+
 
 def _get_headers() -> dict:
     global _headers
@@ -71,5 +76,8 @@ def lookup_barcode(barcode: str) -> dict | None:
     else:
         raw = product.get("quantity", "")
         product_quantity = str(raw).strip() or None
+
+    if product_quantity is not None:
+        product_quantity = product_quantity[:_MAX_PQ_LEN]
 
     return {"name": name, "brand": brand, "product_quantity": product_quantity}

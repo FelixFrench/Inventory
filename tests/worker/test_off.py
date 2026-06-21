@@ -85,6 +85,23 @@ def test_lookup_product_quantity_float_stripped():
     assert result["product_quantity"] == "415g"
 
 
+def test_lookup_product_quantity_truncated_to_max_len():
+    # An anomalous OFF response whose assembled value exceeds the cap must be
+    # truncated to exactly _MAX_PQ_LEN chars before it reaches the DB.
+    resp = _make_response(_product_response(
+        product_name="Beans",
+        brands="Heinz",
+        product_quantity=500,
+        product_quantity_unit="m" * 100,
+    ))
+    with patch("requests.get", return_value=resp), \
+         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
+        off_module._headers = None
+        result = lookup_barcode("1234567890123")
+    assert len(result["product_quantity"]) == off_module._MAX_PQ_LEN
+    assert result["product_quantity"].startswith("500m")
+
+
 # ---------------------------------------------------------------------------
 # lookup_barcode — raw quantity string fallback
 # ---------------------------------------------------------------------------
