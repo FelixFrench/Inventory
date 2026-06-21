@@ -285,7 +285,7 @@ Inventory/
 │   │   ├── current_schema.sql  # Documentation: schema after all migrations
 │   │   └── migrations/         # Alembic env + 5 migration scripts
 │   ├── listener/
-│   │   ├── main.py             # Run loop, reconnect, POSTs scans (httpx)
+│   │   ├── main.py             # Run loop, reconnect, POSTs scans
 │   │   ├── scanner.py          # evdev device enumeration + barcode reconstruction
 │   │   └── validation.py       # is_valid_barcode()
 │   └── worker/
