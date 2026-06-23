@@ -1,4 +1,22 @@
-"""Sainsbury's grocery price lookup via the public GOL product API."""
+"""Sainsbury's grocery price lookup via the public GOL product API.
+
+Resolves a price for a scanned product by querying Sainsbury's groceries
+search (keyword built from brand/name/quantity) and matching the results
+against the product's barcode (EAN). Public entry point is
+``get_price(barcode, name, brand, product_quantity)``, returning the price,
+price type and product URL, or ``None`` when there's no confident match.
+
+DISCLAIMER — personal/educational use only.
+This module queries an undocumented internal Sainsbury's endpoint (not a public
+API) and sends a browser-like User-Agent. It is included for personal,
+educational reference only. This project is not affiliated with or endorsed by
+Sainsbury's; the product and price data belong to Sainsbury's, and automated
+access may be contrary to their website terms. Keep any use low-volume and
+personal — not for bulk or commercial data collection — and ensure your use
+complies with Sainsbury's terms and applicable law. The GPLv3 licence governs
+this code, not your use of any third-party service. See the README section
+"Price data and the Sainsbury's lookup" for the full note.
+"""
 
 import logging
 import time
