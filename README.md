@@ -1,9 +1,6 @@
 # Inventory
 
-A barcode-driven grocery inventory system running on a Raspberry Pi 4B. Open a
-scanning session, scan items in or out with a USB barcode scanner, review the
-batch on a live feed, then confirm it to inventory. Product names, brands, and
-prices are resolved automatically in the background.
+A barcode-driven grocery inventory system running on a Raspberry Pi 4B. Open a scanning session, scan items in or out with a USB barcode scanner, review the batch on a live feed, then confirm it to inventory. Product names, brands, and prices are resolved automatically in the background.
 
 Version history is in [CHANGELOG.md](CHANGELOG.md); releases are tagged in git.
 
@@ -13,14 +10,10 @@ This project has been built largely with Claude Code, and has served as an exerc
 
 ## Overview
 
-- Scanning is **session-based**: start an *in* or *out* session, scan a batch of
-  items, then confirm the whole batch to inventory (or discard it)
-- A **live feed** shows scanned items in real time as they arrive, including
-  background-lookup status
-- New barcodes are resolved automatically via OpenFoodFacts, then priced via the
-  Sainsbury's internal API — lookups never block scanning
-- Inventory, low-stock, and unresolved-barcode reports are available from any
-  device on the LAN via a mobile-first web UI, and can be sent to a receipt printer
+- Scanning is **session-based**: start an *in* or *out* session, scan a batch of items, then confirm the whole batch to inventory (or discard it)
+- A **live feed** shows scanned items in real time as they arrive, including background-lookup status
+- New barcodes are resolved automatically via OpenFoodFacts, then priced via the Sainsbury's internal API — lookups never block scanning
+- Inventory, low-stock, and unresolved-barcode reports are available from any device on the LAN via a mobile-first web UI, and can be sent to a receipt printer
 - Minimum stock levels are editable from the web UI
 - All data is stored locally on the Pi in SQLite
 
@@ -28,12 +21,7 @@ This project has been built largely with Claude Code, and has served as an exerc
 
 ## Scope and security
 
-This system is designed for use on a **trusted home LAN**. It serves over plain
-HTTP (no TLS), the live-feed WebSocket (`/ws`) is unauthenticated, and there is
-no request rate limiting — all deliberate trade-offs for a single-user LAN
-deployment, not oversights. **Do not expose it directly to the public
-internet.** If you need remote access, put it behind a VPN or an authenticating
-reverse proxy with TLS.
+This system is designed for use on a **trusted home LAN**. It serves over plain HTTP (no TLS), the live-feed WebSocket (`/ws`) is unauthenticated, and there is no request rate limiting — all deliberate trade-offs for a single-user LAN deployment, not oversights. **Do not expose it directly to the public internet.** If you need remote access, put it behind a VPN or an authenticating reverse proxy with TLS.
 
 ---
 
@@ -43,22 +31,12 @@ reverse proxy with TLS.
 
 The central concept is the **session** — a single stock-take in one direction:
 
-1. **Start** a session as `in` (receiving stock) or `out` (using stock). Only one
-   session is active at a time.
-2. **Scan** items. Each scan records an *unsigned* count against its barcode in
-   the active session — nothing is written to inventory yet. Scanning with no
-   active session is rejected (`409 no_active_session`).
-3. **Review** on the live feed as items arrive, adjusting counts if needed (for
-   example to undo a misscan).
-4. **Confirm** to apply the session to inventory — counts are *added* for an `in`
-   session and *subtracted* for an `out` session — or **discard** to throw the
-   session away with no inventory change.
+1. **Start** a session as `in` (receiving stock) or `out` (using stock). Only one session is active at a time.
+2. **Scan** items. Each scan records an *unsigned* count against its barcode in the active session — nothing is written to inventory yet. Scanning with no active session is rejected (`409 no_active_session`).
+3. **Review** on the live feed as items arrive, adjusting counts if needed (for example to undo a misscan).
+4. **Confirm** to apply the session to inventory — counts are *added* for an `in` session and *subtracted* for an `out` session — or **discard** to throw the session away with no inventory change.
 
-Confirm is held back until every item's background lookup has finished, and (for
-`out` sessions) it's refused if it would take any item below zero. If the API
-restarts mid-session, the in-progress session is recovered on startup and left
-active for you to finish — it is never auto-confirmed or discarded — and the UI
-shows a brief recovery notice.
+Confirm is held back until every item's background lookup has finished, and (for `out` sessions) it's refused if it would take any item below zero. If the API restarts mid-session, the in-progress session is recovered on startup and left active for you to finish — it is never auto-confirmed or discarded — and the UI shows a brief recovery notice.
 
 ### Services
 
@@ -74,26 +52,18 @@ Three systemd services run on the Pi:
 
 1. The LS2208 scans a barcode → `listener` detects the keystrokes via `/dev/input/`
 2. `listener` POSTs `{ "barcode": "..." }` to `http://127.0.0.1:8000/scan`
-3. FastAPI appends the scan to the active session as an unsigned delta in
-   `session_items` (or returns `409 no_active_session` if none is open), and pushes
-   the update to any connected live-feed clients over the WebSocket
-4. If the barcode hasn't been resolved before, the `worker` picks it up from
-   `session_items` and resolves it in two phases — OpenFoodFacts for product info,
-   then Sainsbury's for price — without blocking scanning
-5. On **confirm**, the session's deltas are applied to inventory in explicit,
-   row-count-checked transactions, and the session is cleared; on **discard**, the
-   session is dropped with no inventory change
+3. FastAPI appends the scan to the active session as an unsigned delta in `session_items` (or returns `409 no_active_session` if none is open), and pushes the update to any connected live-feed clients over the WebSocket
+4. If the barcode hasn't been resolved before, the `worker` picks it up from `session_items` and resolves it in two phases — OpenFoodFacts for product info, then Sainsbury's for price — without blocking scanning
+5. On **confirm**, the session's deltas are applied to inventory in explicit, row-count-checked transactions, and the session is cleared; on **discard**, the session is dropped with no inventory change
 
 ---
 
 ## Requirements
 
 - Raspberry Pi 4B (or similar Linux host)
-- Symbol LS2208 barcode scanner (USB HID; matched by USB vendor `0x05e0` /
-  product `0x1200`)
+- Symbol LS2208 barcode scanner (USB HID; matched by USB vendor `0x05e0` / product `0x1200`)
 - Python 3.11+
-- *Optional:* an EPSON TM-T88IV network thermal printer (ESC/POS over TCP port
-  9100), for printing reports
+- *Optional:* an EPSON TM-T88IV network thermal printer (ESC/POS over TCP port 9100), for printing reports
 
 ---
 
@@ -124,16 +94,11 @@ INVENTORY_API_KEY=choose-a-strong-random-secret
 # PRINTER_IP=192.168.1.50
 ```
 
-`OFF_CONTACT_EMAIL` is used to construct the OpenFoodFacts `User-Agent` header, as
-required by the OFF API terms; the worker won't start without it.
+`OFF_CONTACT_EMAIL` is used to construct the OpenFoodFacts `User-Agent` header, as required by the OFF API terms; the worker won't start without it.
 
-`INVENTORY_API_KEY` is the shared secret that protects the API. The frontend pages
-and the listener must present this key in the `X-API-Key` request header; the API
-won't start without it.
+`INVENTORY_API_KEY` is the shared secret that protects the API. The frontend pages and the listener must present this key in the `X-API-Key` request header; the API won't start without it.
 
-`PRINTER_IP` is optional. Leave it commented out unless you have the printer — the
-rest of the system runs normally without it, and the print endpoints simply return
-a "printer not configured" error.
+`PRINTER_IP` is optional. Leave it commented out unless you have the printer — the rest of the system runs normally without it, and the print endpoints simply return a "printer not configured" error.
 
 ### 2a. Configure the frontend API key
 
@@ -142,8 +107,7 @@ cp frontend/config.example.js frontend/config.js
 # then edit frontend/config.js and set API_KEY to match INVENTORY_API_KEY
 ```
 
-`frontend/config.js` is gitignored and must be created manually on each
-installation.
+`frontend/config.js` is gitignored and must be created manually on each installation.
 
 ### 3. Initialise the database
 
@@ -151,27 +115,22 @@ installation.
 alembic upgrade head
 ```
 
-This creates `inventory.db` with WAL mode enabled, applies all migrations, and
-seeds the `retailers` table (Sainsbury's) and the `worker_state` rate-limit
-anchor. The API also runs migrations automatically on startup, so this step is
-optional if you start the service first — but it's useful to run by hand on a
-fresh install.
+This creates `inventory.db` with WAL mode enabled, applies all migrations, and seeds the `retailers` table (Sainsbury's) and the `worker_state` rate-limit anchor. The API also runs migrations automatically on startup, so this step is optional if you start the service first — but it's useful to run by hand on a fresh install.
 
 ### 4. Scanner permissions (udev rule)
 
 ```bash
 sudo cp systemd/99-inventory-scanner.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
-sudo usermod -aG input <user>   # replace <user> with your username
+sudo usermod -aG input <user>   # replace <user> with your Linux username
 ```
 
-This grants the `input` group read access to the scanner device so the listener
-can run without root.
+This grants the `input` group read access to the scanner device so the listener can run without root.
 
 ### 5. Install and start systemd services
 
 ```bash
-# The units run as user `<user>` from <repo-path> — edit both to
+# The units run as user `<user>` from /path/to/repo — edit both to
 # match your username and clone path first.
 sudo cp systemd/fastapi.service /etc/systemd/system/
 sudo cp systemd/listener.service /etc/systemd/system/
@@ -184,8 +143,7 @@ The web UI is then available at `http://<pi-ip>:8000` from any device on the LAN
 
 ### 6. (Optional) Enable the API docs UI
 
-The Swagger UI assets are not committed. If you want the interactive docs at
-`/docs`, fetch them once:
+The Swagger UI assets are not committed. If you want the interactive docs at `/docs`, fetch them once:
 
 ```bash
 scripts/download_swagger_assets.sh
@@ -203,11 +161,9 @@ The home page (`/feed.html`) is the live feed and session control.
 
 1. Start a session in the direction you want — *in* to add stock, *out* to use it.
 2. Scan items; they appear on the feed as they arrive, with lookup status.
-3. Adjust a count if needed, then **confirm** to commit the batch to inventory, or
-   **discard** to cancel it.
+3. Adjust a count if needed, then **confirm** to commit the batch to inventory, or **discard** to cancel it.
 
-The same actions are available via the API. The session direction field is named
-`type`:
+The same actions are available via the API. The session direction field is named `type`:
 
 ```bash
 # Start an "in" session
@@ -217,10 +173,7 @@ curl -X POST http://localhost:8000/session \
      -d '{"type":"in"}'
 ```
 
-Then `POST /session/confirm` or `POST /session/discard` (no body), and
-`PUT /session/items/{barcode}` with `{"delta": <n>}` to override a count. For exact
-request/response shapes across all endpoints, use the interactive docs (below)
-rather than hard-coding from here.
+Then `POST /session/confirm` or `POST /session/discard` (no body), and `PUT /session/items/{barcode}` with `{"delta": <n>}` to override a count. For exact request/response shapes across all endpoints, use the interactive docs (below) rather than hard-coding from here.
 
 ### Reports
 
@@ -229,8 +182,7 @@ In the browser:
 - `/feed.html` — live scan feed and session control (home page)
 - `/inventory.html` — full inventory with quantities and prices
 - `/low_stock.html` — items below their minimum quantity
-- `/unresolved.html` — barcodes whose product data is incomplete, with per-field
-  resolution status
+- `/unresolved.html` — barcodes whose product data is incomplete, with per-field resolution status
 - `/min_quantities.html` — view and edit minimum stock levels
 
 Or via the API:
@@ -241,8 +193,7 @@ GET /reports/low-stock
 GET /reports/unresolved
 ```
 
-Items with unresolved prices display as `—`. Product names and prices in the
-reports link out to OpenFoodFacts and the Sainsbury's product page where available.
+Items with unresolved prices display as `—`. Product names and prices in the reports link out to OpenFoodFacts and the Sainsbury's product page where available.
 
 ### Print a report
 
@@ -266,8 +217,7 @@ PUT /products/{barcode}/minimum_quantity      # body: {"minimum_quantity": <n>}
 
 The app serves its own API docs:
 
-- `/docs` — Swagger UI (gated; authenticate via `POST /docs-login`, or present the
-  `X-API-Key` header). Requires the one-time asset download in setup step 6.
+- `/docs` — Swagger UI (gated; authenticate via `POST /docs-login`, or present the `X-API-Key` header). Requires the one-time asset download in setup step 6.
 - `/openapi.json` — the OpenAPI schema (structure only, no inventory data)
 
 ---
@@ -324,7 +274,7 @@ Inventory/
 │   ├── download_swagger_assets.sh   # Fetch pinned Swagger UI assets (run once for /docs)
 │   ├── scan-sim.py                  # Dev barcode simulator → POST /scan
 │   └── wipe_db.sh                   # Stop services, delete DB, restart (dev only)
-├── tests/                      # 244 tests across api/, db/, listener/, worker/ (15 modules)
+├── tests/                      # Tests across api/, db/, listener/, worker/ (15 modules)
 ├── config.local.env            # Not committed — OFF_CONTACT_EMAIL, INVENTORY_API_KEY, PRINTER_IP
 ├── requirements.txt
 ├── alembic.ini
@@ -374,37 +324,18 @@ sqlite3 inventory.db ".schema"
 
 ## Notes
 
-- **Scanning requires an active session.** A `POST /scan` with no open session
-  returns `409 no_active_session` rather than touching inventory
-- A session's counts are applied to inventory only on **confirm**, signed by the
-  session direction (added for `in`, subtracted for `out`); **discard** drops them
-  with no change. Confirm is blocked while any of the session's lookups are still
-  pending, and (for `out` sessions) if it would take an item below zero
-- An interrupted session is recovered on API startup and left active to finish, so
-  a restart mid-stock-take does not lose scanned items
-- `StaticFiles` is mounted last in `main.py`, after all `include_router()` calls —
-  it intercepts any path not matched by a registered route, so it must stay last
-- `PRAGMA foreign_keys = ON`, `journal_mode = WAL`, `busy_timeout = 250`, and
-  `synchronous = NORMAL` are set per-connection in `db.py` on every connection;
-  they are not persistent database properties
-- The scanner is identified by USB vendor ID `0x05e0` / product ID `0x1200`, not by
-  device path, which is not stable across reboots
-- Valid barcodes are digits only, 8–14 characters; anything else (including 2D
-  codes like QR / DataMatrix) is rejected
-- `INVENTORY_API_URL` overrides the URL the listener posts scans to (default
-  `http://127.0.0.1:8000/scan`); `INVENTORY_DB` overrides the SQLite path (default
-  `inventory.db` in the repo root). Neither is set by the shipped systemd units —
-  add an `Environment=` line to the relevant unit if you need to change them
-- The receipt printer (if used) is an EPSON TM-T88IV addressed over TCP port 9100
-  at `PRINTER_IP`; printing is optional and independent of the rest of the system
-- The live-feed WebSocket (`/ws`) is unauthenticated and broadcasts scan and
-  resolution events to any client on the LAN that connects
-- OpenFoodFacts is rate-limited client-side: the worker enforces a minimum
-  4-second gap between calls and anchors the timing in the `worker_state` table so
-  it survives restarts (the published "15 requests/min" is just the inverse of
-  that gap; the server returns no rate-limit headers)
-- The `scan_events` and `config` tables are legacy v1 carry-overs — present in the
-  schema but unused by v2 code
+- **Scanning requires an active session.** A `POST /scan` with no open session returns `409 no_active_session` rather than touching inventory
+- A session's counts are applied to inventory only on **confirm**, signed by the session direction (added for `in`, subtracted for `out`); **discard** drops them with no change. Confirm is blocked while any of the session's lookups are still pending, and (for `out` sessions) if it would take an item below zero
+- An interrupted session is recovered on API startup and left active to finish, so a restart mid-stock-take does not lose scanned items
+- `StaticFiles` is mounted last in `main.py`, after all `include_router()` calls — it intercepts any path not matched by a registered route, so it must stay last
+- `PRAGMA foreign_keys = ON`, `journal_mode = WAL`, `busy_timeout = 250`, and `synchronous = NORMAL` are set per-connection in `db.py` on every connection; they are not persistent database properties
+- The scanner is identified by USB vendor ID `0x05e0` / product ID `0x1200`, not by device path, which is not stable across reboots
+- Valid barcodes are digits only, 8–14 characters; anything else (including 2D codes like QR / DataMatrix) is rejected
+- `INVENTORY_API_URL` overrides the URL the listener posts scans to (default `http://127.0.0.1:8000/scan`); `INVENTORY_DB` overrides the SQLite path (default `inventory.db` in the repo root). Neither is set by the shipped systemd units — add an `Environment=` line to the relevant unit if you need to change them
+- The receipt printer (if used) is an EPSON TM-T88IV addressed over TCP port 9100 at `PRINTER_IP`; printing is optional and independent of the rest of the system
+- The live-feed WebSocket (`/ws`) is unauthenticated and broadcasts scan and resolution events to any client on the LAN that connects
+- OpenFoodFacts is rate-limited client-side: the worker enforces a minimum 4-second gap between calls and anchors the timing in the `worker_state` table so it survives restarts (the published "15 requests/min" is just the inverse of that gap; the server returns no rate-limit headers)
+- The `scan_events` and `config` tables are legacy v1 carry-overs — present in the schema but unused by v2 code
 
 ---
 
@@ -422,18 +353,13 @@ The API also runs migrations automatically on startup, so restarting the service
 
 ## Upgrading from v1.x
 
-**v2.0.0 is a breaking change.** The scanning model changed from a persistent
-global *mode* to explicit *sessions*, and several v1 surfaces were removed:
+**v2.0.0 is a breaking change.** The scanning model changed from a persistent global *mode* to explicit *sessions*, and several v1 surfaces were removed:
 
 - The `GET /mode` and `POST /mode` endpoints are gone — start a session instead
-- Scanning no longer mutates inventory immediately; scans accumulate in a session
-  and are applied on confirm. A scan with no active session now returns `409`
-- The `pending_lookups` and `canonical_products` tables were dropped (handled by
-  migration; run `alembic upgrade head`)
-- The old `frontend/index.*` mode-toggle pages were removed; the home page is now
-  the live feed
-- Negative `delta` / `minimum_quantity` values are now rejected with `422`
-  (previously `400`)
+- Scanning no longer mutates inventory immediately; scans accumulate in a session and are applied on confirm. A scan with no active session now returns `409`
+- The `pending_lookups` and `canonical_products` tables were dropped (handled by migration; run `alembic upgrade head`)
+- The old `frontend/index.*` mode-toggle pages were removed; the home page is now the live feed
+- Negative `delta` / `minimum_quantity` values are now rejected with `422` (previously `400`)
 
 See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
@@ -441,26 +367,12 @@ See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## Price data and the Sainsbury's lookup
 
-The optional Sainsbury's price lookup (`src/worker/sainsburys.py`) queries an
-undocumented internal Sainsbury's endpoint - not a public API - sending a
-browser-like `User-Agent`. It is included for personal, educational reference
-only. This project is not affiliated with or endorsed by Sainsbury's; the product
-and price data belong to Sainsbury's, and automated access may be contrary to
-their website terms. Keep any use low-volume and personal — it is not intended for
-bulk or commercial data collection — and you are responsible for ensuring your use
-complies with Sainsbury's terms and applicable law.
+The optional Sainsbury's price lookup (`src/worker/sainsburys.py`) queries an undocumented internal Sainsbury's endpoint — not a public API — sending a browser-like `User-Agent`. It is included for personal, educational reference only. This project is not affiliated with or endorsed by Sainsbury's; the product and price data belong to Sainsbury's, and automated access may be contrary to their website terms. Keep any use low-volume and personal — it is not intended for bulk or commercial data collection — and you are responsible for ensuring your use complies with Sainsbury's terms and applicable law.
 
-OpenFoodFacts, by contrast, is a public API used within its stated terms: the
-`OFF_CONTACT_EMAIL` you configure is sent in the `User-Agent` as the API requires,
-and requests are rate-limited client-side.
+OpenFoodFacts, by contrast, is a public API used within its stated terms: the `OFF_CONTACT_EMAIL` you configure is sent in the `User-Agent` as the API requires, and requests are rate-limited client-side.
 
 ---
 
 ## Licence
 
-This project is free software, licensed under the GNU General Public License v3.0
-(GPLv3) — see the [LICENSE](LICENSE) file for the full text. GPLv3 governs the
-software in this repository (and permits commercial use of the *code*); it does
-not grant any rights in third-party services the software interacts with — see
-[Price data and the Sainsbury's lookup](#price-data-and-the-sainsburys-lookup)
-above.
+This project is free software, licensed under the GNU General Public License v3.0 (GPLv3) — see the [LICENSE](LICENSE) file for the full text. GPLv3 governs the software in this repository (and permits commercial use of the *code*); it does not grant any rights in third-party services the software interacts with — see [Price data and the Sainsbury's lookup](#price-data-and-the-sainsburys-lookup) above.
