@@ -9,9 +9,9 @@ After=network.target fastapi.service
 
 [Service]
 Type=simple
-User=felix
-WorkingDirectory=/home/felix/repos/Inventory
-ExecStart=/home/felix/repos/Inventory/.venv/bin/python -m src.listener.main
+User=<user>
+WorkingDirectory=<repo-path>
+ExecStart=<repo-path>/.venv/bin/python -m src.listener.main
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -20,7 +20,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/home/felix/repos/Inventory
+ReadWritePaths=<repo-path>
 
 [Install]
 WantedBy=multi-user.target
