@@ -7,6 +7,8 @@ prices are resolved automatically in the background.
 
 Version history is in [CHANGELOG.md](CHANGELOG.md); releases are tagged in git.
 
+This project has been built largely with Claude Code, and has served as an exercise for the author to learn to plan, review, and manage AI-driven software development.
+
 ---
 
 ## Overview
@@ -21,6 +23,17 @@ Version history is in [CHANGELOG.md](CHANGELOG.md); releases are tagged in git.
   device on the LAN via a mobile-first web UI, and can be sent to a receipt printer
 - Minimum stock levels are editable from the web UI
 - All data is stored locally on the Pi in SQLite
+
+---
+
+## Scope and security
+
+This system is designed for use on a **trusted home LAN**. It serves over plain
+HTTP (no TLS), the live-feed WebSocket (`/ws`) is unauthenticated, and there is
+no request rate limiting — all deliberate trade-offs for a single-user LAN
+deployment, not oversights. **Do not expose it directly to the public
+internet.** If you need remote access, put it behind a VPN or an authenticating
+reverse proxy with TLS.
 
 ---
 
@@ -423,3 +436,31 @@ global *mode* to explicit *sessions*, and several v1 surfaces were removed:
   (previously `400`)
 
 See [CHANGELOG.md](CHANGELOG.md) for the full list.
+
+---
+
+## Price data and the Sainsbury's lookup
+
+The optional Sainsbury's price lookup (`src/worker/sainsburys.py`) queries an
+undocumented internal Sainsbury's endpoint - not a public API - sending a
+browser-like `User-Agent`. It is included for personal, educational reference
+only. This project is not affiliated with or endorsed by Sainsbury's; the product
+and price data belong to Sainsbury's, and automated access may be contrary to
+their website terms. Keep any use low-volume and personal — it is not intended for
+bulk or commercial data collection — and you are responsible for ensuring your use
+complies with Sainsbury's terms and applicable law.
+
+OpenFoodFacts, by contrast, is a public API used within its stated terms: the
+`OFF_CONTACT_EMAIL` you configure is sent in the `User-Agent` as the API requires,
+and requests are rate-limited client-side.
+
+---
+
+## Licence
+
+This project is free software, licensed under the GNU General Public License v3.0
+(GPLv3) — see the [LICENSE](LICENSE) file for the full text. GPLv3 governs the
+software in this repository (and permits commercial use of the *code*); it does
+not grant any rights in third-party services the software interacts with — see
+[Price data and the Sainsbury's lookup](#price-data-and-the-sainsburys-lookup)
+above.
