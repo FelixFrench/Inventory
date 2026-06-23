@@ -149,7 +149,7 @@ fresh install.
 ```bash
 sudo cp systemd/99-inventory-scanner.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
-sudo usermod -aG input felix   # replace felix with your username
+sudo usermod -aG input <user>   # replace <user> with your username
 ```
 
 This grants the `input` group read access to the scanner device so the listener
@@ -158,7 +158,7 @@ can run without root.
 ### 5. Install and start systemd services
 
 ```bash
-# The units run as user `felix` from /home/felix/repos/Inventory — edit both to
+# The units run as user `<user>` from <repo-path> — edit both to
 # match your username and clone path first.
 sudo cp systemd/fastapi.service /etc/systemd/system/
 sudo cp systemd/listener.service /etc/systemd/system/
@@ -352,6 +352,9 @@ python scripts/scan-sim.py
 
 # Reset database (development only)
 ~/repos/Inventory/scripts/wipe_db.sh
+
+# Print database schema. This should be equivalent to current_schema.sql
+sqlite3 inventory.db ".schema"
 ```
 
 ---

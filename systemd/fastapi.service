@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=felix
-WorkingDirectory=/home/felix/repos/Inventory
-ExecStart=/home/felix/repos/Inventory/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+User=<user>
+WorkingDirectory=<repo-path>
+ExecStart=<repo-path>/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -15,7 +15,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/home/felix/repos/Inventory
+ReadWritePaths=<repo-path>
 
 [Install]
 WantedBy=multi-user.target
