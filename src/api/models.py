@@ -28,7 +28,7 @@ class SessionItem(BaseModel):
     first_scanned_at: str
     name: FieldStatus
     brand: FieldStatus
-    weight: FieldStatus
+    quantity: FieldStatus
     price: FieldStatus
     off_url: str
     price_url: Optional[str]

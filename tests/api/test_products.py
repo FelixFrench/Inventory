@@ -95,7 +95,7 @@ def test_get_minimum_quantities_ordered(client, db):
 
 
 def test_get_minimum_quantities_no_variant_row(client, db):
-    """Products without a product_variants row have name/brand/weight as null."""
+    """Products without a product_variants row have name/brand/quantity as null."""
     db.executescript("""
         INSERT INTO barcodes VALUES ('9999999999999');
         INSERT INTO inventory (barcode, quantity, minimum_quantity) VALUES ('9999999999999', 1, 0);
@@ -105,7 +105,7 @@ def test_get_minimum_quantities_no_variant_row(client, db):
     p = resp.json()["products"][0]
     assert p["name"] is None
     assert p["brand"] is None
-    assert p["weight"] is None
+    assert p["quantity"] is None
     assert p["barcode"] == "9999999999999"
 
 
@@ -122,7 +122,7 @@ def test_get_minimum_quantities_coalesce_null(client, db):
     assert p["current_quantity"] == 5
 
 
-def test_get_minimum_quantities_weight_grams(client, db):
+def test_get_minimum_quantities_quantity_grams(client, db):
     """product_quantity string is returned verbatim."""
     db.executescript("""
         INSERT INTO barcodes VALUES ('1000000000001');
@@ -131,10 +131,10 @@ def test_get_minimum_quantities_weight_grams(client, db):
     """)
     resp = client.get("/products/minimum-quantities")
     p = resp.json()["products"][0]
-    assert p["weight"] == "415g"
+    assert p["quantity"] == "415g"
 
 
-def test_get_minimum_quantities_weight_kg(client, db):
+def test_get_minimum_quantities_quantity_kg(client, db):
     """product_quantity string is returned verbatim for kg products."""
     db.executescript("""
         INSERT INTO barcodes VALUES ('1000000000002');
@@ -143,7 +143,7 @@ def test_get_minimum_quantities_weight_kg(client, db):
     """)
     resp = client.get("/products/minimum-quantities")
     p = resp.json()["products"][0]
-    assert p["weight"] == "1.5kg"
+    assert p["quantity"] == "1.5kg"
 
 
 def test_get_minimum_quantities_empty_inventory(client, db):

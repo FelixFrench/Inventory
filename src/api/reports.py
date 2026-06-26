@@ -78,12 +78,12 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
         has_pv = row['pv_barcode'] is not None
         has_pr = row['pr_barcode'] is not None
 
-        name_label   = _label_for_info_field(row['info_status'], has_pv, row['name'])
-        brand_label  = _label_for_info_field(row['info_status'], has_pv, row['brand'])
-        weight_label = _label_for_info_field(row['info_status'], has_pv, row['product_quantity'])
-        price_label  = _label_for_price(row['price_status'], has_pr, row['price_pence'])
+        name_label     = _label_for_info_field(row['info_status'], has_pv, row['name'])
+        brand_label    = _label_for_info_field(row['info_status'], has_pv, row['brand'])
+        quantity_label = _label_for_info_field(row['info_status'], has_pv, row['product_quantity'])
+        price_label    = _label_for_price(row['price_status'], has_pr, row['price_pence'])
 
-        if all(label == 'resolved' for label in [name_label, brand_label, weight_label, price_label]):
+        if all(label == 'resolved' for label in [name_label, brand_label, quantity_label, price_label]):
             continue
 
         price_value = round(row['price_pence'] / 100, 2) if row['price_pence'] is not None else None
@@ -91,10 +91,10 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
         items.append({
             "barcode":            row['barcode'],
             "inventory_quantity": row['inventory_quantity'],
-            "name":   {"value": row['name'],                  "label": name_label},
-            "brand":  {"value": row['brand'],                 "label": brand_label},
-            "weight": {"value": row['product_quantity'], "label": weight_label},
-            "price":  {"value": price_value,                  "label": price_label},
+            "name":     {"value": row['name'],             "label": name_label},
+            "brand":    {"value": row['brand'],            "label": brand_label},
+            "quantity": {"value": row['product_quantity'], "label": quantity_label},
+            "price":    {"value": price_value,             "label": price_label},
             "off_url":   build_off_url(row['barcode'], name=row['name']),
             "price_url": row['product_url'],
         })

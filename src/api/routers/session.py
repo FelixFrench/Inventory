@@ -64,7 +64,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
             "failed" if r['price_status'] == "not_possible" else r['price_status']
         )
 
-        weight_val = r['product_quantity']
+        quantity_val = r['product_quantity']
         price_val = r['price_pence'] / 100 if r['price_pence'] is not None else None
 
         items.append({
@@ -74,7 +74,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
             "first_scanned_at": r['first_scanned_at'],
             "name": {"value": r['name'], "status": info_s},
             "brand": {"value": r['brand'], "status": info_s},
-            "weight": {"value": weight_val, "status": info_s},
+            "quantity": {"value": quantity_val, "status": info_s},
             "price": {"value": price_val, "status": price_s},
             "off_url":   build_off_url(r['barcode'], info_status=r['info_status']),
             "price_url": r['product_url'],

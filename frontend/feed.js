@@ -1,6 +1,6 @@
 // State
 let sessionType = null; // 'in' | 'out' | null
-let rows = {};          // barcode → {session_delta, name, brand, weight, price}
+let rows = {};          // barcode → {session_delta, name, brand, quantity, price}
 let endStripOpen = false;
 
 // WebSocket
@@ -79,7 +79,7 @@ function makeRowHTML(barcode) {
     const priceHtml = priceHref
         ? `<a href="${esc(priceHref)}" target="_blank" rel="noopener noreferrer">${renderPrice(r.price)}</a>`
         : renderPrice(r.price);
-    const meta = [renderField(r.brand), renderField(r.weight), priceHtml].join(' · ');
+    const meta = [renderField(r.brand), renderField(r.quantity), priceHtml].join(' · ');
     return `
       <div class="feed-row-top">
         ${nameLink}
@@ -213,7 +213,7 @@ function _storeRow(barcode, msg) {
     rows[barcode] = {
         session_delta: msg.session_delta,
         name: msg.name, brand: msg.brand,
-        weight: msg.weight, price: msg.price,
+        quantity: msg.quantity, price: msg.price,
         off_url: msg.off_url,
         price_url: msg.price_url,
     };
@@ -317,7 +317,7 @@ function renderActiveSession(session) {
             session_delta: item.delta, // GET /session uses 'delta'; WS uses 'session_delta'
             inventory_quantity: item.inventory_quantity ?? 0,
             name: item.name, brand: item.brand,
-            weight: item.weight, price: item.price,
+            quantity: item.quantity, price: item.price,
             off_url: item.off_url,
             price_url: item.price_url,
         };

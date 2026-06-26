@@ -161,7 +161,7 @@ class TestExtractPrice:
 BARCODE = "0000000171915"
 NAME = "Red Kidney Beans in Chilli Sauce"
 BRAND = "Sainsbury's"
-WEIGHT = "400g"
+QUANTITY = "400g"
 
 _MATCH = make_product(
     eans=[BARCODE],
@@ -176,7 +176,7 @@ _EMPTY = make_response([])
 
 class TestGetPrice:
     def _call(self):
-        return get_price(BARCODE, NAME, BRAND, WEIGHT)
+        return get_price(BARCODE, NAME, BRAND, QUANTITY)
 
     @patch("src.worker.sainsburys.time.sleep")
     @patch("src.worker.sainsburys.requests.get")
@@ -282,7 +282,7 @@ class TestGetPrice:
         self._call()
         _, kwargs = mock_get.call_args
         params = kwargs["params"]
-        assert params["filter[keyword]"] == "Sainsbury's Red Kidney Beans in Chilli Sauce 400g"  # WEIGHT="400g"
+        assert params["filter[keyword]"] == "Sainsbury's Red Kidney Beans in Chilli Sauce 400g"  # QUANTITY="400g"
         assert params["page_number"] == 1
         assert params["page_size"] == 10
         assert params["sort_order"] == "FAVOURITES_FIRST"
@@ -306,7 +306,7 @@ class TestGetPrice:
             retail_price={"price": 1.10, "measure": "unit"},
         )
         mock_get.side_effect = [make_response([product_with_short_ean])]
-        result = get_price("0000000171915", NAME, BRAND, WEIGHT)
+        result = get_price("0000000171915", NAME, BRAND, QUANTITY)
         assert result is not None
 
     @patch("src.worker.sainsburys.time.sleep")

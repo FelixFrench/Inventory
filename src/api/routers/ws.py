@@ -92,9 +92,9 @@ def build_payload(type_: str, row) -> dict:
     if info_wire == "resolved":
         name_val = row["name"]
         brand_val = row["brand"]
-        weight_val = row["product_quantity"]
+        quantity_val = row["product_quantity"]
     else:
-        name_val = brand_val = weight_val = None
+        name_val = brand_val = quantity_val = None
 
     if price_wire == "resolved":
         price_val = row["price_pence"] / 100 if row["price_pence"] is not None else None
@@ -104,10 +104,10 @@ def build_payload(type_: str, row) -> dict:
     return {
         "type": type_,
         "barcode": row["barcode"],
-        "name":   {"value": name_val,   "status": info_wire},
-        "brand":  {"value": brand_val,  "status": info_wire},
-        "weight": {"value": weight_val, "status": info_wire},
-        "price":  {"value": price_val,  "status": price_wire},
+        "name":     {"value": name_val,     "status": info_wire},
+        "brand":    {"value": brand_val,    "status": info_wire},
+        "quantity": {"value": quantity_val, "status": info_wire},
+        "price":    {"value": price_val,    "status": price_wire},
         "session_delta": row["session_delta"],
         "off_url":   build_off_url(row["barcode"], info_status=row["info_status"]),
         "price_url": row["product_url"],

@@ -12,7 +12,7 @@ This project has been built largely with Claude Code, and has served as an exerc
 
 - Scanning is **session-based**: start an *in* or *out* session, scan a batch of items, then confirm the whole batch to inventory (or discard it)
 - A **live feed** shows scanned items in real time as they arrive, including background-lookup status
-- New barcodes are resolved automatically via OpenFoodFacts, then priced via the Sainsbury's internal API — lookups never block scanning
+- New barcodes are resolved automatically via OpenFoodFacts, then priced via the Sainsbury's API — lookups never block scanning
 - Inventory, low-stock, and unresolved-barcode reports are available from any device on the LAN via a mobile-first web UI, and can be sent to a receipt printer
 - Minimum stock levels are editable from the web UI
 - All data is stored locally on the Pi in SQLite
@@ -21,7 +21,7 @@ This project has been built largely with Claude Code, and has served as an exerc
 
 ## Scope and security
 
-This system is designed for use on a **trusted home LAN**. It serves over plain HTTP (no TLS), the live-feed WebSocket (`/ws`) is unauthenticated, and there is no request rate limiting — all deliberate trade-offs for a single-user LAN deployment, not oversights. **Do not expose it directly to the public internet.** If you need remote access, put it behind a VPN or an authenticating reverse proxy with TLS.
+This system is designed for use on a **trusted home LAN**. It serves over plain HTTP (no TLS), the live-feed WebSocket (`/ws`) is unauthenticated, and there is no request rate limiting. **Do not expose it directly to the public internet.** If you need remote access, put it behind a VPN or an authenticating reverse proxy with TLS.
 
 ---
 
@@ -29,9 +29,9 @@ This system is designed for use on a **trusted home LAN**. It serves over plain 
 
 ### The session lifecycle
 
-The central concept is the **session** — a single stock-take in one direction:
+The central concept is the **session** - a bit like a basket:
 
-1. **Start** a session as `in` (receiving stock) or `out` (using stock). Only one session is active at a time.
+1. **Start** a session as `in` (receiving stock) or `out` (removing stock). Only one session can be active at a time.
 2. **Scan** items. Each scan records an *unsigned* count against its barcode in the active session — nothing is written to inventory yet. Scanning with no active session is rejected (`409 no_active_session`).
 3. **Review** on the live feed as items arrive, adjusting counts if needed (for example to undo a misscan).
 4. **Confirm** to apply the session to inventory — counts are *added* for an `in` session and *subtracted* for an `out` session — or **discard** to throw the session away with no inventory change.
