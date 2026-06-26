@@ -120,11 +120,11 @@ function renderProducts(products) {
     }
     li.appendChild(nameDiv);
 
-    // Brand + weight line (omit if both null)
-    if (p.brand || p.weight) {
+    // Brand + quantity line (omit if both null)
+    if (p.brand || p.quantity) {
       const metaDiv = document.createElement('div');
       metaDiv.className = 'product-meta';
-      const parts = [p.brand, p.weight].filter(Boolean).map(esc);
+      const parts = [p.brand, p.quantity].filter(Boolean).map(esc);
       metaDiv.innerHTML = parts.join(' · ');
       li.appendChild(metaDiv);
     }

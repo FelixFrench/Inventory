@@ -319,7 +319,7 @@ def test_unresolved_no_pv_row(client, db):
     assert item["barcode"] == bc
     assert item["name"]["label"] == "no_data"
     assert item["brand"]["label"] == "no_data"
-    assert item["weight"]["label"] == "no_data"
+    assert item["quantity"]["label"] == "no_data"
     assert item["price"]["label"] == "missing"
 
 
@@ -334,8 +334,8 @@ def test_unresolved_missing_name(client, db):
     assert item["name"]["label"] == "missing"
     assert item["brand"]["label"] == "resolved"
     assert item["brand"]["value"] == "Heinz"
-    assert item["weight"]["label"] == "resolved"
-    assert item["weight"]["value"] == "400g"
+    assert item["quantity"]["label"] == "resolved"
+    assert item["quantity"]["value"] == "400g"
 
 
 def test_unresolved_missing_price(client, db):
@@ -400,7 +400,7 @@ def test_unresolved_session_pending(client, db):
     item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
     assert item["name"]["label"] == "pending"
     assert item["brand"]["label"] == "pending"
-    assert item["weight"]["label"] == "pending"
+    assert item["quantity"]["label"] == "pending"
     assert item["price"]["label"] == "pending"
 
 
@@ -415,7 +415,7 @@ def test_unresolved_session_failed_not_possible(client, db):
     item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
     assert item["name"]["label"] == "failed"
     assert item["brand"]["label"] == "failed"
-    assert item["weight"]["label"] == "failed"
+    assert item["quantity"]["label"] == "failed"
     assert item["price"]["label"] == "not_attempted"
 
 
@@ -431,7 +431,7 @@ def test_unresolved_session_resolved_info_price_pending(client, db):
     item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
     assert item["name"]["label"] == "resolved"
     assert item["brand"]["label"] == "resolved"
-    assert item["weight"]["label"] == "resolved"
+    assert item["quantity"]["label"] == "resolved"
     assert item["price"]["label"] == "pending"
 
 
@@ -447,7 +447,7 @@ def test_unresolved_session_failed_overrides_existing_pv(client, db):
     item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
     assert item["name"]["label"] == "failed"
     assert item["brand"]["label"] == "failed"
-    assert item["weight"]["label"] == "failed"
+    assert item["quantity"]["label"] == "failed"
 
 
 def test_unresolved_ordering_session_first(client, db):

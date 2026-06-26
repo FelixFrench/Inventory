@@ -39,6 +39,23 @@ INSERT INTO config (key, value) VALUES ('scan_mode', 'out');
 
 _SCHEMA_PATH = Path(__file__).parents[2] / "src" / "db" / "initial_schema.sql"
 
+# Schema as of revision 3001ecf62f32 (the head before the legacy-table drop),
+# including the two tables that migration removes: scan_events and config.
+_PRE_DROP_SCHEMA = """
+CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit' CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT PRIMARY KEY REFERENCES barcodes(barcode), quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
+CREATE TABLE scan_events (id INTEGER PRIMARY KEY AUTOINCREMENT, barcode TEXT NOT NULL, retailer_id INTEGER REFERENCES retailers(id), direction TEXT NOT NULL CHECK(direction IN ('in', 'out')), timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
+"""
+
 
 @pytest.fixture
 def db():
@@ -195,6 +212,56 @@ def test_migration_fresh_db():
         ).fetchone()
         assert ws is not None
         assert ws["off_last_called_at"] == "1970-01-01T00:00:00"
+        conn.close()
+    finally:
+        os.unlink(db_path)
+
+
+def test_migration_drops_legacy_scan_events_and_config():
+    """605be7ba628c drops scan_events and config; downgrade recreates their structure."""
+    import os
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        conn = sqlite3.connect(db_path)
+        for stmt in [s.strip() for s in _PRE_DROP_SCHEMA.split(";") if s.strip()]:
+            conn.execute(stmt)
+        conn.commit()
+        # Sanity: both tables exist before the migration.
+        before = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "scan_events" in before
+        assert "config" in before
+        conn.close()
+
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.stamp(alembic_cfg, "3001ecf62f32")
+        command.upgrade(alembic_cfg, "head")
+
+        conn = sqlite3.connect(db_path)
+        after = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "scan_events" not in after
+        assert "config" not in after
+        conn.close()
+
+        # Downgrade recreates both table structures (row data not recoverable).
+        command.downgrade(alembic_cfg, "3001ecf62f32")
+        conn = sqlite3.connect(db_path)
+        restored = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "scan_events" in restored
+        assert "config" in restored
         conn.close()
     finally:
         os.unlink(db_path)

@@ -33,7 +33,7 @@ function renderTable(items) {
     <th>Barcode</th>
     <th>Name</th>
     <th class="col-brand">Brand</th>
-    <th class="col-weight">Weight</th>
+    <th class="col-quantity">Quantity</th>
     <th>Price</th>
     <th>In Stock</th>
   </tr>`;
@@ -59,7 +59,7 @@ function renderTable(items) {
     }
     tr.appendChild(tdBarcode);
 
-    // Name — value or badge, same as Brand/Weight
+    // Name — value or badge, same as Brand/Quantity
     const tdName = document.createElement('td');
     tdName.appendChild(renderField(item.name));
     tr.appendChild(tdName);
@@ -70,11 +70,11 @@ function renderTable(items) {
     tdBrand.appendChild(renderField(item.brand));
     tr.appendChild(tdBrand);
 
-    // Weight
-    const tdWeight = document.createElement('td');
-    tdWeight.className = 'col-weight';
-    tdWeight.appendChild(renderField(item.weight));
-    tr.appendChild(tdWeight);
+    // Quantity
+    const tdQuantity = document.createElement('td');
+    tdQuantity.className = 'col-quantity';
+    tdQuantity.appendChild(renderField(item.quantity));
+    tr.appendChild(tdQuantity);
 
     // Price
     const tdPrice = document.createElement('td');

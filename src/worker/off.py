@@ -6,6 +6,8 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from src.version import __version__
+
 _headers: dict | None = None
 
 # Defensive cap on the externally-sourced product_quantity string before it is
@@ -21,7 +23,7 @@ def _get_headers() -> dict:
         email = os.environ.get("OFF_CONTACT_EMAIL")
         if not email:
             raise RuntimeError("OFF_CONTACT_EMAIL not set in config.local.env")
-        _headers = {"User-Agent": f"FFInventory/2.0.0 ({email})"}
+        _headers = {"User-Agent": f"FFInventory/{__version__} ({email})"}
     return _headers
 
 

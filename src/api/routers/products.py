@@ -17,7 +17,7 @@ def get_minimum_quantities(request: Request, db: sqlite3.Connection = Depends(ge
     """
     List all inventory items with their current and minimum quantities.
 
-    Returns product name, brand, weight, current stock, and minimum stock threshold
+    Returns product name, brand, quantity, current stock, and minimum stock threshold
     for every item in inventory, ordered alphabetically by name.
     """
     try:
@@ -44,7 +44,7 @@ def get_minimum_quantities(request: Request, db: sqlite3.Connection = Depends(ge
                 "barcode": row["barcode"],
                 "name": row["name"],
                 "brand": row["brand"],
-                "weight": row["product_quantity"],
+                "quantity": row["product_quantity"],
                 "current_quantity": row["current_quantity"],
                 "minimum_quantity": row["minimum_quantity"],
             }

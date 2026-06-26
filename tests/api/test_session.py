@@ -173,11 +173,11 @@ def test_get_session_with_items(client, db):
     assert item["delta"] == 2
     assert item["name"] == {"value": "Baked Beans", "status": "resolved"}
     assert item["brand"] == {"value": "Heinz", "status": "resolved"}
-    assert item["weight"] == {"value": "415g", "status": "resolved"}
+    assert item["quantity"] == {"value": "415g", "status": "resolved"}
     assert item["price"] == {"value": 1.23, "status": "resolved"}
 
 
-def test_get_session_weight_kilograms(client, db):
+def test_get_session_quantity_kilograms(client, db):
     session_id = _start_session(client, "in")
     _seed_item(db, _BARCODE, session_id, delta=1,
                info_status="resolved", price_status="resolved",
@@ -186,7 +186,7 @@ def test_get_session_weight_kilograms(client, db):
     resp = client.get("/session")
     assert resp.status_code == 200
     item = resp.json()["session"]["items"][0]
-    assert item["weight"] == {"value": "1.5kg", "status": "resolved"}
+    assert item["quantity"] == {"value": "1.5kg", "status": "resolved"}
 
 
 def test_get_session_status_loading(client, db):

@@ -21,6 +21,7 @@ from src.api.routers import products, reports, scan, session
 from src.api.routers.ws import POLL_QUERY, build_payload, manager
 from src.api.routers.ws import router as ws_router
 from src.db.db import get_connection
+from src.version import __version__
 
 import os
 from dotenv import load_dotenv
@@ -135,7 +136,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     lifespan=lifespan,
     title="Inventory API",
-    version="2.0.0",
+    version=__version__,
     docs_url=None,
     redoc_url=None,
     openapi_url=None,

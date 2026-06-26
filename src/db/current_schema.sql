@@ -55,18 +55,7 @@ CREATE INDEX idx_session_items_info_pending
 CREATE INDEX idx_session_items_price_pending
     ON session_items(first_scanned_at)
     WHERE price_status = 'pending';
-CREATE TABLE scan_events (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    barcode     TEXT    NOT NULL,
-    retailer_id INTEGER REFERENCES retailers(id),
-    direction   TEXT    NOT NULL CHECK(direction IN ('in', 'out')),
-    timestamp   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
 CREATE TABLE worker_state (
     id                INTEGER PRIMARY KEY CHECK(id = 1),
     off_last_called_at TEXT NOT NULL
-);
-CREATE TABLE config (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
 );
