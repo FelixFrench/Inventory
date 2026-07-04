@@ -10,9 +10,9 @@ PRAGMA foreign_keys = ON;
 DELETE FROM inventory
   WHERE quantity = 0;
 DELETE FROM prices
-  WHERE barcode NOT IN (SELECT barcode FROM inventory);
+  WHERE (barcode, retailer_id) NOT IN (SELECT barcode, retailer_id FROM inventory);
 DELETE FROM product_variants
-  WHERE barcode NOT IN (SELECT barcode FROM inventory);
+  WHERE (barcode, retailer_id) NOT IN (SELECT barcode, retailer_id FROM inventory);
 DELETE FROM barcodes
   WHERE barcode NOT IN (SELECT barcode FROM inventory);
 SQL

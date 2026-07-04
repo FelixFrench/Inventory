@@ -20,17 +20,20 @@ CREATE TABLE product_variants (
     PRIMARY KEY (barcode, retailer_id)
 );
 CREATE TABLE prices (
-    barcode     TEXT    NOT NULL REFERENCES barcodes(barcode),
-    retailer_id INTEGER NOT NULL REFERENCES retailers(id),
+    barcode     TEXT    NOT NULL,
+    retailer_id INTEGER NOT NULL,
     price_pence INTEGER,
     price_type  TEXT NOT NULL DEFAULT 'unit'
                     CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL,
-    PRIMARY KEY (barcode, retailer_id)
+    PRIMARY KEY (barcode, retailer_id),
+    FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id)
 );
 CREATE TABLE inventory (
-    barcode          TEXT    PRIMARY KEY REFERENCES barcodes(barcode),
+    barcode          TEXT    NOT NULL REFERENCES barcodes(barcode),
+    retailer_id      INTEGER NOT NULL REFERENCES retailers(id),
     quantity         INTEGER NOT NULL DEFAULT 0,
-    minimum_quantity INTEGER NOT NULL DEFAULT 0
+    minimum_quantity INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (barcode, retailer_id)
 );
 CREATE TABLE sessions (
     id           INTEGER PRIMARY KEY,
@@ -41,13 +44,14 @@ CREATE TABLE sessions (
 CREATE TABLE session_items (
     session_id      INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     barcode         TEXT    NOT NULL REFERENCES barcodes(barcode),
+    retailer_id     INTEGER NOT NULL REFERENCES retailers(id),
     delta           INTEGER NOT NULL CHECK(delta >= 0),
     info_status     TEXT    NOT NULL DEFAULT 'pending'
                                 CHECK(info_status IN ('pending', 'resolved', 'failed')),
     price_status    TEXT    NOT NULL DEFAULT 'pending'
                                 CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')),
     first_scanned_at TEXT   NOT NULL,
-    PRIMARY KEY (session_id, barcode)
+    PRIMARY KEY (session_id, barcode, retailer_id)
 );
 CREATE INDEX idx_session_items_info_pending
     ON session_items(first_scanned_at)

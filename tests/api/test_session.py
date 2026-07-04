@@ -16,9 +16,9 @@ CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
 CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE inventory (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
-CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL, delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
 CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
@@ -93,9 +93,9 @@ def _seed_item(db, barcode, session_id, delta=1,
                name=None, brand=None, product_quantity=None, price_pence=None, product_url=None):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
     db.execute(
-        "INSERT INTO session_items (session_id, barcode, delta, info_status, price_status, first_scanned_at) "
-        "VALUES (?, ?, ?, ?, ?, '2026-05-27T10:00:00')",
-        (session_id, barcode, delta, info_status, price_status)
+        "INSERT INTO session_items (session_id, barcode, retailer_id, delta, info_status, price_status, first_scanned_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, '2026-05-27T10:00:00')",
+        (session_id, barcode, _RETAILER_ID, delta, info_status, price_status)
     )
     if name is not None:
         db.execute(
@@ -234,7 +234,7 @@ def test_confirm_scan_in_increments_inventory(client, db):
 
 def test_confirm_scan_out_decrements_inventory(client, db):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
-    db.execute("INSERT INTO inventory (barcode, quantity) VALUES (?, 10)", (_BARCODE,))
+    db.execute("INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 10)", (_BARCODE, _RETAILER_ID))
     db.commit()
     session_id = _start_session(client, "out")
     _seed_item(db, _BARCODE, session_id, delta=3,
@@ -296,7 +296,7 @@ def test_confirm_pending_check_inside_transaction(client, db):
 
 def test_confirm_scan_out_would_go_negative(client, db):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
-    db.execute("INSERT INTO inventory (barcode, quantity) VALUES (?, 1)", (_BARCODE,))
+    db.execute("INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 1)", (_BARCODE, _RETAILER_ID))
     db.commit()
     session_id = _start_session(client, "out")
     _seed_item(db, _BARCODE, session_id, delta=5,
@@ -362,7 +362,7 @@ def test_confirm_zero_delta_item_skipped(client, db):
 
 def test_discard_active_session(client, db):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
-    db.execute("INSERT INTO inventory (barcode, quantity) VALUES (?, 5)", (_BARCODE,))
+    db.execute("INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 5)", (_BARCODE, _RETAILER_ID))
     db.commit()
     session_id = _start_session(client)
     _seed_item(db, _BARCODE, session_id)
@@ -535,6 +535,7 @@ def test_put_delta_broadcasts_delta_update(client, db):
     payload = json.loads(mock_mgr.broadcast.call_args[0][0])
     assert payload["type"] == "delta_update"
     assert payload["barcode"] == _BARCODE
+    assert payload["retailer"] == 1
     assert payload["session_delta"] == 5
     assert payload["session_total_delta"] == 5
 
@@ -568,7 +569,7 @@ def test_get_session_item_includes_inventory_quantity(client, db):
     _seed_item(db, _BARCODE, session_id, delta=1,
                info_status="resolved", price_status="resolved")
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
-    db.execute("INSERT INTO inventory (barcode, quantity) VALUES (?, 4)", (_BARCODE,))
+    db.execute("INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 4)", (_BARCODE, _RETAILER_ID))
     db.commit()
 
     resp = client.get("/session")
@@ -657,4 +658,5 @@ def test_get_session_recovered_at_appears_in_response(client, db):
     assert resp.status_code == 200
     data = resp.json()["session"]
     assert data["recovered_at"] == "2026-06-01T09:00:00"
+    assert data["retailer"] == 1
 

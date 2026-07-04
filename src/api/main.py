@@ -31,9 +31,13 @@ load_dotenv(Path(__file__).parents[2] / "config.local.env")
 logger = logging.getLogger(__name__)
 
 
-def _compute_poll_updates(rows, last_seen: dict) -> list[str]:
+def _compute_poll_updates(rows, last_seen: dict, retailer_id: int) -> list[str]:
     """Pure sync function. Computes which rows changed, mutates last_seen in-place,
-    and returns a list of JSON strings ready to broadcast."""
+    and returns a list of JSON strings ready to broadcast.
+
+    ``last_seen`` is keyed by barcode only: correct under the single-retailer invariant
+    (one session_items row per (session_id, barcode)). Re-keying to include retailer_id
+    is deferred with the rest of the worker/frontend composite work (Phase 3 / 2e)."""
     payloads = []
     current_barcodes = set()
     for row in rows:
@@ -41,7 +45,7 @@ def _compute_poll_updates(rows, last_seen: dict) -> list[str]:
         current_barcodes.add(barcode)
         new_status = (row["info_status"], row["price_status"])
         if last_seen.get(barcode) != new_status:
-            payloads.append(json.dumps(build_payload("resolution", row)))
+            payloads.append(json.dumps(build_payload("resolution", row, retailer_id)))
             last_seen[barcode] = new_status
     for b in list(last_seen.keys()):
         if b not in current_barcodes:
@@ -49,9 +53,9 @@ def _compute_poll_updates(rows, last_seen: dict) -> list[str]:
     return payloads
 
 
-async def _poll_tick(rows, last_seen: dict) -> None:
+async def _poll_tick(rows, last_seen: dict, retailer_id: int) -> None:
     """Async wrapper: broadcasts all changed payloads from one poll tick."""
-    for payload in _compute_poll_updates(rows, last_seen):
+    for payload in _compute_poll_updates(rows, last_seen, retailer_id):
         await manager.broadcast(payload)
 
 
@@ -62,7 +66,7 @@ async def _session_poll_loop(retailer_id: int) -> None:
         while True:
             try:
                 rows = conn.execute(POLL_QUERY, (retailer_id, retailer_id)).fetchall()
-                await _poll_tick(rows, last_seen)
+                await _poll_tick(rows, last_seen, retailer_id)
             except Exception:
                 logger.exception("Poll loop tick failed")
             await asyncio.sleep(1)

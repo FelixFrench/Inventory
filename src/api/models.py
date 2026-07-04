@@ -39,6 +39,9 @@ class SessionObject(BaseModel):
     type: str
     started_at: str
     recovered_at: Optional[str]
+    # retailer_id integer (always Sainsbury's this sprint); provisional wire identity
+    # for 1b, to be ratified in 2c. Frontend does not consume it yet (deferred to 2e).
+    retailer: int
     total_delta: int
     items: list[SessionItem]
 

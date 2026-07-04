@@ -38,6 +38,7 @@ manager = ConnectionManager()
 # contract consumed by build_payload below — the two must stay in sync.
 POLL_QUERY = """
 SELECT si.barcode,
+       si.retailer_id,
        si.delta AS session_delta,
        si.info_status,
        si.price_status,
@@ -78,13 +79,17 @@ def _status_to_wire(db_status: str) -> str:
     return _STATUS_MAP.get(db_status, "failed")  # 'failed' and 'not_possible' → 'failed'
 
 
-def build_payload(type_: str, row) -> dict:
+def build_payload(type_: str, row, retailer_id: int) -> dict:
     """Build wire payload from a DB row or dict.
 
     Row must provide keys: barcode, session_delta, info_status, price_status,
     name, brand, product_quantity, price_pence, product_url. Works with sqlite3.Row
     objects (which support dict-style access when row_factory = sqlite3.Row)
     and plain dicts.
+
+    ``retailer_id`` is emitted as the ``retailer`` field: the unambiguous durable key,
+    always Sainsbury's this sprint. Provisional wire identity for 1b — 2c may map
+    id -> slug without changing it. Frontend does not consume it yet (deferred to 2e).
     """
     info_wire = _status_to_wire(row["info_status"])
     price_wire = _status_to_wire(row["price_status"])
@@ -104,6 +109,7 @@ def build_payload(type_: str, row) -> dict:
     return {
         "type": type_,
         "barcode": row["barcode"],
+        "retailer": retailer_id,
         "name":     {"value": name_val,     "status": info_wire},
         "brand":    {"value": brand_val,    "status": info_wire},
         "quantity": {"value": quantity_val, "status": info_wire},

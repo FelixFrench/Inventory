@@ -15,9 +15,9 @@ CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
 CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE inventory (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL, started_at TEXT NOT NULL, recovered_at TEXT);
-CREATE TABLE session_items (session_id INTEGER NOT NULL, barcode TEXT NOT NULL, delta INTEGER NOT NULL, info_status TEXT NOT NULL DEFAULT 'pending', price_status TEXT NOT NULL DEFAULT 'pending', first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
+CREATE TABLE session_items (session_id INTEGER NOT NULL, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, delta INTEGER NOT NULL, info_status TEXT NOT NULL DEFAULT 'pending', price_status TEXT NOT NULL DEFAULT 'pending', first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
 CREATE TABLE worker_state (id INTEGER PRIMARY KEY, off_last_called_at TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
@@ -76,8 +76,8 @@ def _seed_item(db, barcode: str, name: str, brand: str = None,
         (barcode, _RETAILER_ID, name, brand)
     )
     db.execute(
-        "INSERT INTO inventory (barcode, quantity, minimum_quantity) VALUES (?, ?, ?)",
-        (barcode, quantity, minimum_quantity)
+        "INSERT INTO inventory (barcode, retailer_id, quantity, minimum_quantity) VALUES (?, ?, ?, ?)",
+        (barcode, _RETAILER_ID, quantity, minimum_quantity)
     )
     if price_pence is not None:
         db.execute(
@@ -152,8 +152,8 @@ def _seed_off_failed_item(db, barcode: str, quantity: int):
     """Insert a barcode+inventory row only — no product_variants, no prices."""
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
     db.execute(
-        "INSERT INTO inventory (barcode, quantity) VALUES (?, ?)",
-        (barcode, quantity)
+        "INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, ?)",
+        (barcode, _RETAILER_ID, quantity)
     )
     db.commit()
 
@@ -289,9 +289,9 @@ def _seed_session(db, session_id=1):
 
 def _seed_session_item(db, barcode, session_id=1, info_status='pending', price_status='pending'):
     db.execute(
-        """INSERT INTO session_items (session_id, barcode, delta, info_status, price_status, first_scanned_at)
-           VALUES (?, ?, 1, ?, ?, '2024-01-01T00:00:00')""",
-        (session_id, barcode, info_status, price_status),
+        """INSERT INTO session_items (session_id, barcode, retailer_id, delta, info_status, price_status, first_scanned_at)
+           VALUES (?, ?, ?, 1, ?, ?, '2024-01-01T00:00:00')""",
+        (session_id, barcode, _RETAILER_ID, info_status, price_status),
     )
     db.commit()
 
@@ -481,7 +481,7 @@ def test_unresolved_inventory_quantity_from_row(client, db):
     _seed_barcode(db, bc)
     _seed_pv(db, bc, name=None, brand=None, product_quantity=None)
     db.execute(
-        "INSERT INTO inventory (barcode, quantity) VALUES (?, 5)", (bc,)
+        "INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 5)", (bc, _RETAILER_ID)
     )
     db.commit()
 
