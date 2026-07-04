@@ -50,11 +50,11 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
         FROM   session_items si
         LEFT   JOIN product_variants pv ON pv.barcode = si.barcode AND pv.retailer_id = ?
         LEFT   JOIN prices pr            ON pr.barcode = si.barcode AND pr.retailer_id = ?
-        LEFT   JOIN inventory inv        ON inv.barcode = si.barcode
+        LEFT   JOIN inventory inv        ON inv.barcode = si.barcode AND inv.retailer_id = ?
         WHERE  si.session_id = ?
         ORDER  BY si.first_scanned_at ASC
         """,
-        (retailer_id, retailer_id, session_row['id'])
+        (retailer_id, retailer_id, retailer_id, session_row['id'])
     ).fetchall()
 
     items = []
@@ -85,6 +85,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
         type=session_row['type'],
         started_at=session_row['started_at'],
         recovered_at=session_row['recovered_at'],
+        retailer=retailer_id,
         total_delta=total_delta,
         items=[SessionItem(**item) for item in items],
     )
@@ -205,7 +206,8 @@ def confirm_session(retailer_id: int = Depends(get_retailer_id)) -> ConfirmRespo
                                COALESCE(inv.quantity, 0) AS current_qty,
                                si.delta
                         FROM   session_items si
-                        LEFT   JOIN inventory inv ON inv.barcode = si.barcode
+                        LEFT   JOIN inventory inv
+                               ON inv.barcode = si.barcode AND inv.retailer_id = si.retailer_id
                         WHERE  si.session_id = ?
                           AND  (COALESCE(inv.quantity, 0) - si.delta) < 0
                         """,
@@ -231,18 +233,20 @@ def confirm_session(retailer_id: int = Depends(get_retailer_id)) -> ConfirmRespo
                 if session_type == "in":
                     conn.execute(
                         """
-                        INSERT INTO inventory (barcode, quantity)
-                        SELECT barcode, delta FROM session_items WHERE session_id = ? AND delta != 0
-                        ON CONFLICT(barcode) DO UPDATE SET quantity = quantity + excluded.quantity
+                        INSERT INTO inventory (barcode, retailer_id, quantity)
+                        SELECT barcode, retailer_id, delta FROM session_items
+                        WHERE session_id = ? AND delta != 0
+                        ON CONFLICT(barcode, retailer_id) DO UPDATE SET quantity = quantity + excluded.quantity
                         """,
                         (session_id,)
                     )
                 else:
                     conn.execute(
                         """
-                        INSERT INTO inventory (barcode, quantity)
-                        SELECT barcode, delta FROM session_items WHERE session_id = ? AND delta != 0
-                        ON CONFLICT(barcode) DO UPDATE SET quantity = quantity - excluded.quantity
+                        INSERT INTO inventory (barcode, retailer_id, quantity)
+                        SELECT barcode, retailer_id, delta FROM session_items
+                        WHERE session_id = ? AND delta != 0
+                        ON CONFLICT(barcode, retailer_id) DO UPDATE SET quantity = quantity - excluded.quantity
                         """,
                         (session_id,)
                     )
@@ -331,7 +335,9 @@ def _do_put_delta(barcode: str, new_delta: int) -> dict | None:
 
 
 @router.put("/session/items/{barcode}")
-async def put_session_item_delta(barcode: str, body: DeltaUpdateRequest) -> dict:
+async def put_session_item_delta(
+    barcode: str, body: DeltaUpdateRequest, retailer_id: int = Depends(get_retailer_id)
+) -> dict:
     """
     Update the delta for a specific item in the active session.
 
@@ -355,6 +361,7 @@ async def put_session_item_delta(barcode: str, body: DeltaUpdateRequest) -> dict
     await manager.broadcast(json.dumps({
         "type": "delta_update",
         "barcode": result["barcode"],
+        "retailer": retailer_id,
         "session_delta": result["delta"],
         "session_total_delta": result["session_total_delta"],
     }))

@@ -53,10 +53,10 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
                     LEFT JOIN prices pr
                            ON pr.barcode = b.barcode AND pr.retailer_id = ?
                     LEFT JOIN inventory inv
-                           ON inv.barcode = b.barcode
+                           ON inv.barcode = b.barcode AND inv.retailer_id = ?
                     WHERE b.barcode = ?
                     """,
-                    (retailer_id, retailer_id, barcode),
+                    (retailer_id, retailer_id, retailer_id, barcode),
                 ).fetchone()
 
                 has_info = bool(check["has_info"])
@@ -75,16 +75,18 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
                 conn.execute(
                     """
                     INSERT INTO session_items
-                        (session_id, barcode, delta, first_scanned_at, info_status, price_status)
-                    VALUES (?, ?, 1, ?, ?, ?)
-                    ON CONFLICT(session_id, barcode) DO UPDATE SET delta = delta + 1
+                        (session_id, barcode, retailer_id, delta, first_scanned_at,
+                         info_status, price_status)
+                    VALUES (?, ?, ?, 1, ?, ?, ?)
+                    ON CONFLICT(session_id, barcode, retailer_id) DO UPDATE SET delta = delta + 1
                     """,
-                    (session_id, barcode, now, info_status, price_status),
+                    (session_id, barcode, retailer_id, now, info_status, price_status),
                 )
 
                 delta = conn.execute(
-                    "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ?",
-                    (session_id, barcode),
+                    "SELECT delta FROM session_items "
+                    "WHERE session_id = ? AND barcode = ? AND retailer_id = ?",
+                    (session_id, barcode, retailer_id),
                 ).fetchone()["delta"]
 
             return {
@@ -118,7 +120,7 @@ async def scan(body: ScanRequest, request: Request) -> ScanResponse:
     """
     retailer_id = request.app.state.sainsburys_retailer_id
     result = await asyncio.to_thread(_do_scan, body.barcode, retailer_id)
-    payload = build_payload("scan", result)
+    payload = build_payload("scan", result, retailer_id)
     payload["inventory_quantity"] = result["inventory_quantity"]
     await manager.broadcast(json.dumps(payload))
     return ScanResponse(barcode=result["barcode"], session_delta=result["session_delta"])

@@ -34,7 +34,8 @@ def get_minimum_quantities(request: Request, db: sqlite3.Connection = Depends(ge
             FROM inventory inv
             LEFT JOIN product_variants pv
                 ON pv.barcode = inv.barcode
-                AND pv.retailer_id = ?
+                AND pv.retailer_id = inv.retailer_id
+            WHERE inv.retailer_id = ?
             ORDER BY pv.name ASC NULLS LAST, inv.barcode ASC
             """,
             (retailer_id,),
@@ -80,9 +81,10 @@ def set_minimum_quantity(
     if body.minimum_quantity < 0:
         return JSONResponse(status_code=400, content={"error": "invalid_minimum_quantity"})
     try:
+        retailer_id = request.app.state.sainsburys_retailer_id
         cursor = db.execute(
-            "UPDATE inventory SET minimum_quantity = ? WHERE barcode = ?",
-            (body.minimum_quantity, barcode),
+            "UPDATE inventory SET minimum_quantity = ? WHERE barcode = ? AND retailer_id = ?",
+            (body.minimum_quantity, barcode, retailer_id),
         )
         db.commit()
         if cursor.rowcount == 0:

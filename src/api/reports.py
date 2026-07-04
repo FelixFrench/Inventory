@@ -52,9 +52,9 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
         LEFT JOIN prices pr
                ON pr.barcode = b.barcode AND pr.retailer_id = ?
         LEFT JOIN inventory inv
-               ON inv.barcode = b.barcode
+               ON inv.barcode = b.barcode AND inv.retailer_id = ?
         LEFT JOIN session_items si
-               ON si.barcode = b.barcode AND si.session_id = ?
+               ON si.barcode = b.barcode AND si.session_id = ? AND si.retailer_id = ?
         WHERE (
             pv.barcode     IS NULL
             OR pv.name     IS NULL
@@ -70,7 +70,7 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
             pv.name ASC NULLS LAST,
             b.barcode ASC
         """,
-        (retailer_id, retailer_id, session_id)
+        (retailer_id, retailer_id, retailer_id, session_id, retailer_id)
     ).fetchall()
 
     items = []
@@ -108,11 +108,12 @@ def get_inventory_report(db, retailer_id: int) -> dict:
         SELECT i.barcode, COALESCE(pv.name, i.barcode) AS name, pv.brand, i.quantity,
                p.price_pence, p.product_url
         FROM inventory i
-        LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = ?
-        LEFT JOIN prices p ON p.barcode = i.barcode AND p.retailer_id = ?
+        LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = i.retailer_id
+        LEFT JOIN prices p ON p.barcode = i.barcode AND p.retailer_id = i.retailer_id
+        WHERE i.retailer_id = ?
         ORDER BY (i.quantity = 0), LOWER(COALESCE(pv.name, i.barcode))
         """,
-        (retailer_id, retailer_id)
+        (retailer_id,)
     ).fetchall()
 
     items = []
@@ -139,8 +140,8 @@ def get_low_stock_report(db, retailer_id: int) -> dict:
         SELECT COALESCE(pv.name, i.barcode) AS name, pv.brand, i.quantity, i.minimum_quantity,
                (i.minimum_quantity - i.quantity) AS shortfall
         FROM inventory i
-        LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = ?
-        WHERE i.quantity < i.minimum_quantity
+        LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = i.retailer_id
+        WHERE i.quantity < i.minimum_quantity AND i.retailer_id = ?
         ORDER BY shortfall DESC, LOWER(COALESCE(pv.name, i.barcode))
         """,
         (retailer_id,)

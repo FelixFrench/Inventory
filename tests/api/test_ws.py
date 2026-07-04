@@ -18,9 +18,9 @@ CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
 CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE inventory (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
-CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL, delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
 CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
@@ -173,6 +173,7 @@ def test_scan_broadcasts_scan_payload(client, db):
 
     assert msg["type"] == "scan"
     assert msg["barcode"] == _BARCODE
+    assert msg["retailer"] == 1
     assert msg["session_delta"] == 1
 
 
@@ -188,18 +189,19 @@ def test_scan_no_broadcast_on_failure(client, db):
 def test_poll_emits_on_first_sighting():
     last_seen = {}
     rows = [_make_row(_BARCODE, "resolved", "resolved")]
-    payloads = _compute_poll_updates(rows, last_seen)
+    payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
     assert len(payloads) == 1
     assert last_seen[_BARCODE] == ("resolved", "resolved")
     msg = json.loads(payloads[0])
     assert msg["type"] == "resolution"
     assert msg["barcode"] == _BARCODE
+    assert msg["retailer"] == 1
 
 
 def test_poll_emits_on_status_change():
     last_seen = {_BARCODE: ("pending", "pending")}
     rows = [_make_row(_BARCODE, "resolved", "pending")]
-    payloads = _compute_poll_updates(rows, last_seen)
+    payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
     assert len(payloads) == 1
     assert last_seen[_BARCODE] == ("resolved", "pending")
 
@@ -207,14 +209,14 @@ def test_poll_emits_on_status_change():
 def test_poll_silent_on_no_change():
     last_seen = {_BARCODE: ("resolved", "resolved")}
     rows = [_make_row(_BARCODE, "resolved", "resolved")]
-    payloads = _compute_poll_updates(rows, last_seen)
+    payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
     assert len(payloads) == 0
     assert last_seen[_BARCODE] == ("resolved", "resolved")
 
 
 def test_poll_prunes_removed_barcode():
     last_seen = {_BARCODE: ("resolved", "resolved")}
-    payloads = _compute_poll_updates([], last_seen)
+    payloads = _compute_poll_updates([], last_seen, _RETAILER_ID)
     assert len(payloads) == 0
     assert last_seen == {}
 
@@ -222,7 +224,7 @@ def test_poll_prunes_removed_barcode():
 def test_poll_emits_after_restart():
     last_seen = {}
     rows = [_make_row(_BARCODE, "resolved", "resolved")]
-    payloads = _compute_poll_updates(rows, last_seen)
+    payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
     assert len(payloads) == 1
 
 
@@ -278,7 +280,7 @@ def test_scan_broadcast_includes_inventory_quantity(client, db):
         "INSERT INTO prices (barcode, retailer_id, price_pence, price_type) VALUES (?, ?, 123, 'unit')",
         (_BARCODE, _RETAILER_ID),
     )
-    db.execute("INSERT INTO inventory (barcode, quantity) VALUES (?, 2)", (_BARCODE,))
+    db.execute("INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 2)", (_BARCODE, _RETAILER_ID))
     db.commit()
 
     with client.websocket_connect("/ws") as ws:
@@ -311,26 +313,27 @@ _OFF_ADD  = "https://world.openfoodfacts.org/cgi/product.pl?type=edit&code={}"
 
 def test_build_payload_off_url_view_when_resolved():
     row = _make_row(_BARCODE, "resolved", "resolved")
-    payload = build_payload("resolution", row)
+    payload = build_payload("resolution", row, _RETAILER_ID)
     assert payload["off_url"] == _OFF_VIEW.format(_BARCODE)
+    assert payload["retailer"] == 1
 
 
 def test_build_payload_off_url_add_when_failed():
     row = _make_row(_BARCODE, "failed", "not_possible")
-    payload = build_payload("resolution", row)
+    payload = build_payload("resolution", row, _RETAILER_ID)
     assert payload["off_url"] == _OFF_ADD.format(_BARCODE)
 
 
 def test_build_payload_price_url_none_when_absent():
     row = _make_row(_BARCODE, "resolved", "resolved", product_url=None)
-    payload = build_payload("scan", row)
+    payload = build_payload("scan", row, _RETAILER_ID)
     assert payload["price_url"] is None
 
 
 def test_build_payload_price_url_present_when_set():
     url = "https://www.sainsburys.co.uk/gol-ui/product/test"
     row = _make_row(_BARCODE, "resolved", "resolved", product_url=url)
-    payload = build_payload("scan", row)
+    payload = build_payload("scan", row, _RETAILER_ID)
     assert payload["price_url"] == url
 
 
@@ -380,12 +383,13 @@ def test_cm_broadcast_zero_clients_no_error():
 def test_poll_emits_on_price_status_change():
     last_seen = {_BARCODE: ("resolved", "pending")}
     rows = [_make_row(_BARCODE, "resolved", "resolved")]
-    payloads = _compute_poll_updates(rows, last_seen)
+    payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
     assert len(payloads) == 1
     assert last_seen[_BARCODE] == ("resolved", "resolved")
     msg = json.loads(payloads[0])
     assert msg["type"] == "resolution"
     assert msg["barcode"] == _BARCODE
+    assert msg["retailer"] == 1
 
 
 # ── Item 55: scan broadcast includes price_url when product_url is set ───────
@@ -417,11 +421,11 @@ def test_scan_broadcast_includes_price_url_when_set(client, db):
 def test_build_payload_resolution_price_url_present_when_set():
     url = "https://www.sainsburys.co.uk/gol-ui/product/test"
     row = _make_row(_BARCODE, "resolved", "resolved", product_url=url)
-    payload = build_payload("resolution", row)
+    payload = build_payload("resolution", row, _RETAILER_ID)
     assert payload["price_url"] == url
 
 
 def test_build_payload_resolution_price_url_none_when_absent():
     row = _make_row(_BARCODE, "resolved", "resolved", product_url=None)
-    payload = build_payload("resolution", row)
+    payload = build_payload("resolution", row, _RETAILER_ID)
     assert payload["price_url"] is None
