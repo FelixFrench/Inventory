@@ -17,6 +17,7 @@ CREATE TABLE product_variants (
     name        TEXT,
     brand       TEXT,
     product_quantity TEXT,
+    minimum_quantity INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (barcode, retailer_id)
 );
 CREATE TABLE prices (
@@ -29,10 +30,9 @@ CREATE TABLE prices (
     FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id)
 );
 CREATE TABLE inventory (
-    barcode          TEXT    NOT NULL REFERENCES barcodes(barcode),
-    retailer_id      INTEGER NOT NULL REFERENCES retailers(id),
-    quantity         INTEGER NOT NULL DEFAULT 0,
-    minimum_quantity INTEGER NOT NULL DEFAULT 0,
+    barcode     TEXT    NOT NULL REFERENCES barcodes(barcode),
+    retailer_id INTEGER NOT NULL REFERENCES retailers(id),
+    quantity    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (barcode, retailer_id)
 );
 CREATE TABLE sessions (

@@ -368,7 +368,9 @@ def test_rekey_upgrade_shapes_data_and_constraints():
         alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
         alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
         command.stamp(alembic_cfg, _PREV_REV)
-        command.upgrade(alembic_cfg, "head")
+        # Pinned to the 1b revision (not "head"): 1c drops inventory.minimum_quantity,
+        # which this 1b-scoped test still reads below.
+        command.upgrade(alembic_cfg, _REKEY_REV)
 
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
@@ -447,7 +449,7 @@ def test_rekey_downgrade_roundtrip_preserves_data():
         alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
         alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
         command.stamp(alembic_cfg, _PREV_REV)
-        command.upgrade(alembic_cfg, "head")
+        command.upgrade(alembic_cfg, _REKEY_REV)  # 1b-scoped (see note above)
 
         # Downgrade restores the barcode-only shapes and prices' two separate FKs.
         command.downgrade(alembic_cfg, _PREV_REV)
@@ -464,7 +466,7 @@ def test_rekey_downgrade_roundtrip_preserves_data():
         conn.close()
 
         # Re-upgrade: back to composite, data still intact.
-        command.upgrade(alembic_cfg, "head")
+        command.upgrade(alembic_cfg, _REKEY_REV)  # 1b-scoped (see note above)
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         assert _pk_columns(conn, "inventory") == ["barcode", "retailer_id"]
@@ -497,17 +499,224 @@ def test_rekey_idempotent_second_run_is_noop():
         alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
         alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
         command.stamp(alembic_cfg, _PREV_REV)
-        command.upgrade(alembic_cfg, "head")
+        command.upgrade(alembic_cfg, _REKEY_REV)  # 1b-scoped (see note above)
 
         # Simulate a re-run after a manual stamp back to the previous revision:
         # the guard must detect the fully-applied schema and no-op.
         command.stamp(alembic_cfg, _PREV_REV)
-        command.upgrade(alembic_cfg, "head")
+        command.upgrade(alembic_cfg, _REKEY_REV)
 
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         assert _pk_columns(conn, "inventory") == ["barcode", "retailer_id"]
         assert conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0] == 2
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.close()
+    finally:
+        os.unlink(db_path)
+
+
+# ---------------------------------------------------------------------------
+# 1c: move minimum_quantity from inventory to product_variants (revision 66c63d972d98)
+# ---------------------------------------------------------------------------
+
+_MOVE_MIN_REV = "66c63d972d98"
+
+# Post-1b schema — the state 1c starts from: inventory carries minimum_quantity with a
+# composite PK; product_variants has no minimum_quantity yet. Built inline because
+# current_schema.sql is now the *post-1c* shape and cannot reconstruct the old state.
+_POST_1B_SCHEMA = """
+PRAGMA foreign_keys = ON;
+CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit' CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
+CREATE INDEX idx_session_items_info_pending ON session_items(first_scanned_at) WHERE info_status = 'pending';
+CREATE INDEX idx_session_items_price_pending ON session_items(first_scanned_at) WHERE price_status = 'pending';
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
+INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
+"""
+
+
+def _has_column(conn, table: str, column: str) -> bool:
+    return any(r[1] == column for r in conn.execute(f"PRAGMA table_info('{table}')").fetchall())
+
+
+def _seed_pre_1c(conn):
+    # (a) backfill case: variant row + inventory row with a minimum.
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000001')")
+    conn.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity) "
+        "VALUES ('5000000000001', 1, 'Beans', 'Heinz', '415g')"
+    )
+    conn.execute(
+        "INSERT INTO inventory (barcode, retailer_id, quantity, minimum_quantity) "
+        "VALUES ('5000000000001', 1, 7, 2)"
+    )
+    # (b) orphan-carry case: inventory minimum > 0 with NO product_variants row.
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000002')")
+    conn.execute(
+        "INSERT INTO inventory (barcode, retailer_id, quantity, minimum_quantity) "
+        "VALUES ('5000000000002', 1, 3, 5)"
+    )
+    # (c) zero-minimum orphan (no variant, min 0): must NOT create a carry row.
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000003')")
+    conn.execute(
+        "INSERT INTO inventory (barcode, retailer_id, quantity, minimum_quantity) "
+        "VALUES ('5000000000003', 1, 1, 0)"
+    )
+    conn.commit()
+
+
+def _build_post_1b_db(db_path):
+    conn = sqlite3.connect(db_path)
+    for stmt in [s.strip() for s in _POST_1B_SCHEMA.split(";") if s.strip()]:
+        conn.execute(stmt)
+    _seed_pre_1c(conn)
+    conn.close()
+
+
+def test_move_min_upgrade_backfills_carries_and_drops():
+    """1c upgrade: pv.minimum_quantity added + backfilled, orphan minimum carried as a
+    null-data variant row, zero-minimum orphan skipped, inventory.minimum_quantity dropped."""
+    import os
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_post_1b_db(db_path)
+
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.stamp(alembic_cfg, _REKEY_REV)
+        command.upgrade(alembic_cfg, "head")
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+
+        # Column moved: present on product_variants, absent from inventory.
+        assert _has_column(conn, "product_variants", "minimum_quantity")
+        assert not _has_column(conn, "inventory", "minimum_quantity")
+
+        # (a) existing variant backfilled from inventory.
+        row = conn.execute(
+            "SELECT minimum_quantity FROM product_variants WHERE barcode='5000000000001' AND retailer_id=1"
+        ).fetchone()
+        assert row["minimum_quantity"] == 2
+
+        # (b) orphan minimum carried into a null-data variant row.
+        carry = conn.execute(
+            "SELECT name, brand, product_quantity, minimum_quantity FROM product_variants "
+            "WHERE barcode='5000000000002' AND retailer_id=1"
+        ).fetchone()
+        assert carry is not None
+        assert carry["minimum_quantity"] == 5
+        assert carry["name"] is None and carry["brand"] is None and carry["product_quantity"] is None
+
+        # (c) zero-minimum orphan did NOT create a carry row.
+        assert conn.execute(
+            "SELECT COUNT(*) FROM product_variants WHERE barcode='5000000000003'"
+        ).fetchone()[0] == 0
+
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.close()
+    finally:
+        os.unlink(db_path)
+
+
+def test_move_min_downgrade_roundtrip_restores_inventory_minimums():
+    """upgrade -> downgrade restores inventory.minimum_quantity for the common case;
+    re-upgrade moves it back. (Orphan-carry rows persist as null-data variant rows — a
+    documented, accepted downgrade artifact.)"""
+    import os
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_post_1b_db(db_path)
+
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.stamp(alembic_cfg, _REKEY_REV)
+        command.upgrade(alembic_cfg, "head")
+
+        command.downgrade(alembic_cfg, _REKEY_REV)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        assert _has_column(conn, "inventory", "minimum_quantity")
+        assert not _has_column(conn, "product_variants", "minimum_quantity")
+        # Backfill case restored to inventory.
+        assert conn.execute(
+            "SELECT minimum_quantity FROM inventory WHERE barcode='5000000000001' AND retailer_id=1"
+        ).fetchone()["minimum_quantity"] == 2
+        # Orphan minimum restored to inventory from the carry row.
+        assert conn.execute(
+            "SELECT minimum_quantity FROM inventory WHERE barcode='5000000000002' AND retailer_id=1"
+        ).fetchone()["minimum_quantity"] == 5
+        # Documented artifact: the carry variant row still exists after downgrade.
+        assert conn.execute(
+            "SELECT COUNT(*) FROM product_variants WHERE barcode='5000000000002'"
+        ).fetchone()[0] == 1
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.close()
+
+        # Re-upgrade: column moves back onto product_variants.
+        command.upgrade(alembic_cfg, "head")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        assert _has_column(conn, "product_variants", "minimum_quantity")
+        assert not _has_column(conn, "inventory", "minimum_quantity")
+        conn.close()
+    finally:
+        os.unlink(db_path)
+
+
+def test_move_min_idempotent_rerun_is_noop():
+    """Re-running the 1c upgrade after a completed move (inventory column already dropped)
+    is a clean no-op via the column-presence guards; data is untouched."""
+    import os
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_post_1b_db(db_path)
+
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.stamp(alembic_cfg, _REKEY_REV)
+        command.upgrade(alembic_cfg, "head")
+
+        # Simulate a re-run after a manual stamp back to the pre-1c revision: the guards
+        # must detect the completed move (inventory col gone, pv col present) and no-op.
+        command.stamp(alembic_cfg, _REKEY_REV)
+        command.upgrade(alembic_cfg, "head")
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        assert _has_column(conn, "product_variants", "minimum_quantity")
+        assert not _has_column(conn, "inventory", "minimum_quantity")
+        assert conn.execute(
+            "SELECT minimum_quantity FROM product_variants WHERE barcode='5000000000001' AND retailer_id=1"
+        ).fetchone()["minimum_quantity"] == 2
+        assert conn.execute(
+            "SELECT minimum_quantity FROM product_variants WHERE barcode='5000000000002' AND retailer_id=1"
+        ).fetchone()["minimum_quantity"] == 5
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         conn.close()
     finally:

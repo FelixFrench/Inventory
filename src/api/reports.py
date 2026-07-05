@@ -137,11 +137,12 @@ def get_inventory_report(db, retailer_id: int) -> dict:
 def get_low_stock_report(db, retailer_id: int) -> dict:
     rows = db.execute(
         """
-        SELECT COALESCE(pv.name, i.barcode) AS name, pv.brand, i.quantity, i.minimum_quantity,
-               (i.minimum_quantity - i.quantity) AS shortfall
+        SELECT COALESCE(pv.name, i.barcode) AS name, pv.brand, i.quantity,
+               COALESCE(pv.minimum_quantity, 0) AS minimum_quantity,
+               (COALESCE(pv.minimum_quantity, 0) - i.quantity) AS shortfall
         FROM inventory i
         LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = i.retailer_id
-        WHERE i.quantity < i.minimum_quantity AND i.retailer_id = ?
+        WHERE i.quantity < COALESCE(pv.minimum_quantity, 0) AND i.retailer_id = ?
         ORDER BY shortfall DESC, LOWER(COALESCE(pv.name, i.barcode))
         """,
         (retailer_id,)
