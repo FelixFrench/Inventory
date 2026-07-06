@@ -63,3 +63,21 @@ CREATE TABLE worker_state (
     id                INTEGER PRIMARY KEY CHECK(id = 1),
     off_last_called_at TEXT NOT NULL
 );
+CREATE TABLE product_groups (
+    id               INTEGER PRIMARY KEY,
+    name             TEXT    NOT NULL UNIQUE,
+    minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0)
+);
+CREATE TABLE group_variant_members (
+    group_id    INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE,
+    barcode     TEXT    NOT NULL,
+    retailer_id INTEGER NOT NULL,
+    PRIMARY KEY (group_id, barcode, retailer_id),
+    FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id) ON DELETE CASCADE
+);
+CREATE TABLE group_group_members (
+    parent_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE,
+    child_group_id  INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (parent_group_id, child_group_id),
+    CHECK (parent_group_id != child_group_id)
+);
