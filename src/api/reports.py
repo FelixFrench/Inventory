@@ -1,3 +1,4 @@
+from src.api.groups import is_low_stock, resolve_all_groups, shortfall
 from src.api.urls import off_url as build_off_url
 
 
@@ -135,18 +136,57 @@ def get_inventory_report(db, retailer_id: int) -> dict:
 
 
 def get_low_stock_report(db, retailer_id: int) -> dict:
+    """Two independent sections: groups below their own minimum, and products below theirs.
+
+    A variant and a group it belongs to are evaluated independently and can both appear.
+    The groups section is produced via ``resolve_group`` (no re-derived member-sum); the
+    products section's have/need/short come from the shared ``is_low_stock`` / ``shortfall``
+    helpers (no inline arithmetic).
+    """
+    # low_stock already encodes (minimum > 0 AND total < minimum), so organisational groups
+    # (minimum 0) are excluded here. Sort the resolutions before shaping to dicts.
+    low_groups = [g for g in resolve_all_groups(db) if g.low_stock]
+    low_groups.sort(key=lambda g: (-g.shortfall, g.name.lower()))
+    groups = [
+        {
+            "group_id": g.group_id,
+            "name": g.name,
+            "have": g.total_quantity,
+            "need": g.minimum_quantity,
+            "short": g.shortfall,
+        }
+        for g in low_groups
+    ]
+
+    # Minimum now lives on product_variants, so source candidates from there (LEFT JOIN
+    # inventory for the current quantity) rather than from inventory rows.
     rows = db.execute(
         """
-        SELECT COALESCE(pv.name, i.barcode) AS name, pv.brand, i.quantity,
-               COALESCE(pv.minimum_quantity, 0) AS minimum_quantity,
-               (COALESCE(pv.minimum_quantity, 0) - i.quantity) AS shortfall
-        FROM inventory i
-        LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = i.retailer_id
-        WHERE i.quantity < COALESCE(pv.minimum_quantity, 0) AND i.retailer_id = ?
-        ORDER BY shortfall DESC, LOWER(COALESCE(pv.name, i.barcode))
+        SELECT pv.barcode,
+               COALESCE(pv.name, pv.barcode) AS name,
+               pv.brand,
+               COALESCE(inv.quantity, 0)     AS have,
+               pv.minimum_quantity           AS need
+        FROM product_variants pv
+        LEFT JOIN inventory inv
+               ON inv.barcode = pv.barcode AND inv.retailer_id = pv.retailer_id
+        WHERE pv.retailer_id = ? AND pv.minimum_quantity > 0
         """,
-        (retailer_id,)
+        (retailer_id,),
     ).fetchall()
 
-    items = [dict(r) for r in rows]
-    return {"items": items}
+    low_rows = [r for r in rows if is_low_stock(r["have"], r["need"])]
+    low_rows.sort(key=lambda r: (-shortfall(r["have"], r["need"]), r["name"].lower()))
+    products = [
+        {
+            "barcode": r["barcode"],
+            "name": r["name"],
+            "brand": r["brand"],
+            "have": r["have"],
+            "need": r["need"],
+            "short": shortfall(r["have"], r["need"]),
+        }
+        for r in low_rows
+    ]
+
+    return {"groups": groups, "products": products}

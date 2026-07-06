@@ -21,6 +21,9 @@ CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN 
 CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL, delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
 CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0));
+CREATE TABLE group_variant_members (group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, PRIMARY KEY (group_id, barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id) ON DELETE CASCADE);
+CREATE TABLE group_group_members (parent_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, child_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, PRIMARY KEY (parent_group_id, child_group_id), CHECK (parent_group_id != child_group_id));
 INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
 INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
 """
@@ -94,14 +97,17 @@ INVENTORY_NO_PRICES = {
     "total_value_pence": 0,
 }
 
-LOW_STOCK_TWO_ITEMS = {
-    "items": [
-        {"name": "Baked Beans", "brand": "Heinz", "quantity": 3, "minimum_quantity": 5, "shortfall": 2},
-        {"name": "Kidney Beans", "brand": None, "quantity": 0, "minimum_quantity": 3, "shortfall": 3},
-    ]
+LOW_STOCK_REPORT = {
+    "groups": [
+        {"group_id": 1, "name": "Bean Collection", "have": 2, "need": 5, "short": 3},
+    ],
+    "products": [
+        {"barcode": "1", "name": "Baked Beans", "brand": "Heinz", "have": 3, "need": 5, "short": 2},
+        {"barcode": "2", "name": "Kidney Beans", "brand": None, "have": 0, "need": 3, "short": 3},
+    ],
 }
 
-LOW_STOCK_EMPTY = {"items": []}
+LOW_STOCK_EMPTY = {"groups": [], "products": []}
 
 
 # ---------------------------------------------------------------------------
@@ -127,16 +133,29 @@ def test_format_inventory_no_prices():
 
 
 def test_format_low_stock_names_and_quantities():
-    raw = _format_low_stock(LOW_STOCK_TWO_ITEMS)
+    raw = _format_low_stock(LOW_STOCK_REPORT)
+    assert b"Bean Collection" in raw
     assert b"Baked Beans" in raw
     assert b"Kidney Beans" in raw
     assert b"3" in raw
     assert b"5" in raw
 
 
+def test_format_low_stock_sections_and_no_footer():
+    """Groups section precedes Products section; the old 'n items below minimum' footer is gone."""
+    raw = _format_low_stock(LOW_STOCK_REPORT)
+    assert b"GROUPS" in raw
+    assert b"PRODUCTS" in raw
+    assert raw.index(b"GROUPS") < raw.index(b"PRODUCTS")
+    # The removed footer read "<n> item(s) below minimum" — assert that phrasing is gone.
+    assert b"items below minimum" not in raw
+    assert b"item below minimum" not in raw
+
+
 def test_format_low_stock_empty():
     raw = _format_low_stock(LOW_STOCK_EMPTY)
-    assert b"All items in stock" in raw
+    assert b"No groups below minimum" in raw
+    assert b"No products below minimum" in raw
 
 
 # ---------------------------------------------------------------------------

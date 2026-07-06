@@ -20,6 +20,9 @@ CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL, started_at TE
 CREATE TABLE session_items (session_id INTEGER NOT NULL, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, delta INTEGER NOT NULL, info_status TEXT NOT NULL DEFAULT 'pending', price_status TEXT NOT NULL DEFAULT 'pending', first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
 CREATE TABLE worker_state (id INTEGER PRIMARY KEY, off_last_called_at TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0));
+CREATE TABLE group_variant_members (group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, PRIMARY KEY (group_id, barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id) ON DELETE CASCADE);
+CREATE TABLE group_group_members (parent_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, child_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, PRIMARY KEY (parent_group_id, child_group_id), CHECK (parent_group_id != child_group_id));
 INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
 INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
 """
@@ -67,9 +70,9 @@ def client_no_auth(db):
     app.dependency_overrides.clear()
 
 
-def _seed_item(db, barcode: str, name: str, brand: str = None,
-               quantity: int = 0, minimum_quantity: int = 0, price_pence: int = None,
-               product_url: str = None):
+def _seed_item(db, barcode: str, name: str, brand: str | None = None,
+               quantity: int = 0, minimum_quantity: int = 0, price_pence: int | None = None,
+               product_url: str | None = None):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
     db.execute(
         "INSERT INTO product_variants (barcode, retailer_id, name, brand, minimum_quantity) VALUES (?, ?, ?, ?, ?)",
@@ -200,25 +203,53 @@ def test_inventory_mixed_resolved_and_failed(client, db):
 # GET /reports/low-stock
 # ---------------------------------------------------------------------------
 
+def _seed_group(db, gid, name, minimum=0):
+    db.execute(
+        "INSERT INTO product_groups (id, name, minimum_quantity) VALUES (?, ?, ?)",
+        (gid, name, minimum),
+    )
+    db.commit()
+
+
+def _add_group_variant(db, gid, barcode):
+    db.execute(
+        "INSERT INTO group_variant_members (group_id, barcode, retailer_id) VALUES (?, ?, ?)",
+        (gid, barcode, _RETAILER_ID),
+    )
+    db.commit()
+
+
 def test_low_stock_none(client, db):
     _seed_item(db, "5000000000007", "Rice", quantity=5, minimum_quantity=2)
 
     resp = client.get("/reports/low-stock")
     assert resp.status_code == 200
-    assert resp.json() == {"items": []}
+    assert resp.json() == {"groups": [], "products": []}
 
 
-def test_low_stock_one_item(client, db):
+def test_low_stock_two_section_shape(client):
+    resp = client.get("/reports/low-stock")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert set(data.keys()) == {"groups", "products"}
+    assert data == {"groups": [], "products": []}
+
+
+def test_low_stock_one_product(client, db):
     _seed_item(db, "5000000000008", "Red Lentils", brand="Laila", quantity=1, minimum_quantity=3)
 
     resp = client.get("/reports/low-stock")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data["items"]) == 1
-    item = data["items"][0]
-    assert item["quantity"] == 1
-    assert item["minimum_quantity"] == 3
-    assert item["shortfall"] == 2
+    assert data["groups"] == []
+    assert len(data["products"]) == 1
+    item = data["products"][0]
+    assert item["barcode"] == "5000000000008"
+    assert item["name"] == "Red Lentils"
+    assert item["brand"] == "Laila"
+    assert item["have"] == 1
+    assert item["need"] == 3
+    assert item["short"] == 2
 
 
 def test_low_stock_excludes_exactly_at_minimum(client, db):
@@ -226,7 +257,7 @@ def test_low_stock_excludes_exactly_at_minimum(client, db):
 
     resp = client.get("/reports/low-stock")
     assert resp.status_code == 200
-    assert resp.json() == {"items": []}
+    assert resp.json()["products"] == []
 
 
 def test_low_stock_excludes_zero_minimum(client, db):
@@ -234,21 +265,66 @@ def test_low_stock_excludes_zero_minimum(client, db):
 
     resp = client.get("/reports/low-stock")
     assert resp.status_code == 200
-    assert resp.json() == {"items": []}
+    assert resp.json()["products"] == []
 
 
-def test_low_stock_sorted_by_shortfall_desc(client, db):
+def test_low_stock_products_sorted_by_short_desc(client, db):
     _seed_item(db, "5000000000011", "Item A", quantity=2, minimum_quantity=3)
     _seed_item(db, "5000000000012", "Item B", quantity=0, minimum_quantity=3)
 
     resp = client.get("/reports/low-stock")
     assert resp.status_code == 200
-    items = resp.json()["items"]
-    assert len(items) == 2
-    assert items[0]["name"] == "Item B"
-    assert items[0]["shortfall"] == 3
-    assert items[1]["name"] == "Item A"
-    assert items[1]["shortfall"] == 1
+    products = resp.json()["products"]
+    assert len(products) == 2
+    assert products[0]["name"] == "Item B"
+    assert products[0]["short"] == 3
+    assert products[1]["name"] == "Item A"
+    assert products[1]["short"] == 1
+
+
+def test_low_stock_group_below_minimum_appears(client, db):
+    _seed_item(db, "5000000000013", "Bean Can", quantity=2, minimum_quantity=0)
+    _seed_group(db, 1, "Beans", minimum=5)
+    _add_group_variant(db, 1, "5000000000013")
+
+    resp = client.get("/reports/low-stock")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["groups"]) == 1
+    g = data["groups"][0]
+    assert g["group_id"] == 1
+    assert g["name"] == "Beans"
+    assert g["have"] == 2
+    assert g["need"] == 5
+    assert g["short"] == 3
+    # The variant itself has minimum 0, so it does not appear in products.
+    assert data["products"] == []
+
+
+def test_low_stock_organisational_group_excluded(client, db):
+    """A group with minimum_quantity=0 never appears regardless of stock."""
+    _seed_item(db, "5000000000014", "Item", quantity=0, minimum_quantity=0)
+    _seed_group(db, 1, "Org Only", minimum=0)
+    _add_group_variant(db, 1, "5000000000014")
+
+    resp = client.get("/reports/low-stock")
+    assert resp.status_code == 200
+    assert resp.json()["groups"] == []
+
+
+def test_low_stock_group_and_member_both_appear(client, db):
+    """A variant and a group it belongs to are evaluated independently; both can appear."""
+    _seed_item(db, "5000000000015", "Shared Item", quantity=1, minimum_quantity=3)
+    _seed_group(db, 1, "Group X", minimum=5)
+    _add_group_variant(db, 1, "5000000000015")
+
+    resp = client.get("/reports/low-stock")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["groups"]) == 1
+    assert data["groups"][0]["short"] == 4   # 5 - 1
+    assert len(data["products"]) == 1
+    assert data["products"][0]["short"] == 2  # 3 - 1
 
 
 # ---------------------------------------------------------------------------

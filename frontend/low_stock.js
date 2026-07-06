@@ -1,21 +1,45 @@
 // esc() lives in shared-utils.js (loaded before this script).
 
-function render(data) {
-  const el = document.getElementById('content');
-  if (data.items.length === 0) {
-    el.innerHTML = '<p class="empty">All items are sufficiently stocked.</p>';
-  } else {
-    const rows = data.items.map(item => `
+function groupsTable(groups) {
+  if (groups.length === 0) {
+    return '<p class="empty">No groups below minimum.</p>';
+  }
+  const rows = groups.map(g => `
+          <tr>
+            <td><div>${esc(g.name) || '—'}</div></td>
+            <td>${g.have}</td>
+            <td>${g.need}</td>
+            <td class="shortfall-col"><span class="shortfall-badge">${g.short}</span></td>
+          </tr>`).join('');
+  return `
+          <table>
+            <thead>
+              <tr>
+                <th>Group</th>
+                <th>Have</th>
+                <th>Need</th>
+                <th class="shortfall-col">Short</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>`;
+}
+
+function productsTable(products) {
+  if (products.length === 0) {
+    return '<p class="empty">No products below minimum.</p>';
+  }
+  const rows = products.map(item => `
           <tr>
             <td>
               <div>${esc(item.name) || '—'}</div>
               ${item.brand ? '<div class="brand">' + esc(item.brand) + '</div>' : ''}
             </td>
-            <td>${item.quantity}</td>
-            <td>${item.minimum_quantity}</td>
-            <td class="shortfall-col"><span class="shortfall-badge">${item.shortfall}</span></td>
+            <td>${item.have}</td>
+            <td>${item.need}</td>
+            <td class="shortfall-col"><span class="shortfall-badge">${item.short}</span></td>
           </tr>`).join('');
-    el.innerHTML = `
+  return `
           <table>
             <thead>
               <tr>
@@ -27,7 +51,19 @@ function render(data) {
             </thead>
             <tbody>${rows}</tbody>
           </table>`;
-  }
+}
+
+function render(data) {
+  const el = document.getElementById('content');
+  el.innerHTML = `
+        <section class="low-stock-section">
+          <h2>Groups</h2>
+          ${groupsTable(data.groups)}
+        </section>
+        <section class="low-stock-section">
+          <h2>Products</h2>
+          ${productsTable(data.products)}
+        </section>`;
   document.getElementById('loading').classList.add('hidden');
   el.classList.remove('hidden');
 }

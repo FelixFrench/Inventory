@@ -17,7 +17,7 @@ import src.api.dependencies as _api_deps
 from src.api.dependencies import verify_api_key, verify_docs_access
 from src.api.models import DocsLoginRequest
 from src.api.routers import printing as print_router
-from src.api.routers import products, reports, scan, session
+from src.api.routers import groups, products, reports, scan, session
 from src.api.routers.ws import POLL_QUERY, build_payload, manager
 from src.api.routers.ws import router as ws_router
 from src.db.db import get_connection
@@ -150,6 +150,7 @@ app.include_router(scan.router,    dependencies=[Depends(verify_api_key)])
 app.include_router(session.router, dependencies=[Depends(verify_api_key)])
 app.include_router(reports.router,   dependencies=[Depends(verify_api_key)])
 app.include_router(products.router,  dependencies=[Depends(verify_api_key)])
+app.include_router(groups.router,    dependencies=[Depends(verify_api_key)])
 app.include_router(print_router.router, dependencies=[Depends(verify_api_key)])
 app.include_router(ws_router)
 

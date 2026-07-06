@@ -6,7 +6,12 @@ from fastapi.responses import JSONResponse
 
 from src.api.dependencies import get_db, get_retailer_id
 from src.api.errors import SERVICE_UNAVAILABLE_503 as _503
-from src.api.models import SetMinimumQuantityRequest
+from src.api.models import AddGroupMembershipRequest, SetMinimumQuantityRequest
+from src.api.routers.groups import (
+    add_variant_to_group,
+    remove_variant_from_group,
+    run_membership,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Products"])
@@ -101,3 +106,99 @@ def set_minimum_quantity(
     except Exception as e:
         logger.error("DB error updating minimum_quantity for %s: %s", barcode, e)
         return JSONResponse(status_code=500, content={"error": "internal_error"})
+
+
+@router.get("/products/{barcode}", response_model=None)
+def get_product_detail(
+    barcode: str,
+    db: sqlite3.Connection = Depends(get_db),
+    retailer_id: int = Depends(get_retailer_id),
+) -> dict | JSONResponse:
+    """
+    Return one variant's own fields, current inventory quantity, minimum, price fields,
+    and the groups it is directly a member of.
+
+    LEFT JOINs throughout so a null-data / unresolved variant still renders (null name/brand/
+    quantity, no price row). A barcode absent from `barcodes` entirely -> 404 barcode_not_found.
+    Returns raw nullable fields; the frontend (2c) decides display text. No lookup-status
+    field -- the durable status columns do not exist until 3a.
+    """
+    try:
+        row = db.execute(
+            """
+            SELECT
+                b.barcode,
+                pv.name,
+                pv.brand,
+                pv.product_quantity,
+                COALESCE(pv.minimum_quantity, 0) AS minimum_quantity,
+                COALESCE(inv.quantity, 0)        AS current_quantity,
+                pr.price_pence,
+                pr.price_type,
+                pr.product_url
+            FROM barcodes b
+            LEFT JOIN product_variants pv
+                   ON pv.barcode = b.barcode AND pv.retailer_id = ?
+            LEFT JOIN inventory inv
+                   ON inv.barcode = b.barcode AND inv.retailer_id = ?
+            LEFT JOIN prices pr
+                   ON pr.barcode = b.barcode AND pr.retailer_id = ?
+            WHERE b.barcode = ?
+            """,
+            (retailer_id, retailer_id, retailer_id, barcode),
+        ).fetchone()
+        if row is None:
+            return JSONResponse(status_code=404, content={"error": "barcode_not_found"})
+
+        group_rows = db.execute(
+            "SELECT pg.id, pg.name FROM group_variant_members gvm "
+            "JOIN product_groups pg ON pg.id = gvm.group_id "
+            "WHERE gvm.barcode = ? AND gvm.retailer_id = ? ORDER BY pg.name ASC",
+            (barcode, retailer_id),
+        ).fetchall()
+
+        return {
+            "barcode": row["barcode"],
+            "name": row["name"],
+            "brand": row["brand"],
+            "product_quantity": row["product_quantity"],
+            "minimum_quantity": row["minimum_quantity"],
+            "current_quantity": row["current_quantity"],
+            "price_pence": row["price_pence"],
+            "price_type": row["price_type"],
+            "product_url": row["product_url"],
+            "groups": [{"id": r["id"], "name": r["name"]} for r in group_rows],
+        }
+    except sqlite3.OperationalError:
+        raise _503
+    except Exception as e:
+        logger.error("DB error fetching product detail for %s: %s", barcode, e)
+        return JSONResponse(status_code=500, content={"error": "internal_error"})
+
+
+@router.post("/products/{barcode}/groups", response_model=None)
+def add_product_to_group(
+    barcode: str,
+    body: AddGroupMembershipRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    retailer_id: int = Depends(get_retailer_id),
+) -> dict | JSONResponse:
+    """Product-facing membership add: put this variant into a group. Drives the same edge
+    logic as the group-side endpoint (upsert-then-insert, idempotent)."""
+    return run_membership(
+        db, lambda: add_variant_to_group(db, body.group_id, barcode, retailer_id)
+    )
+
+
+@router.delete("/products/{barcode}/groups/{group_id}", response_model=None)
+def remove_product_from_group(
+    barcode: str,
+    group_id: int,
+    db: sqlite3.Connection = Depends(get_db),
+    retailer_id: int = Depends(get_retailer_id),
+) -> dict | JSONResponse:
+    """Product-facing membership remove. Validates both the barcode and the group exist
+    (symmetric with the group side); a valid non-membership is an idempotent no-op."""
+    return run_membership(
+        db, lambda: remove_variant_from_group(db, group_id, barcode, retailer_id)
+    )

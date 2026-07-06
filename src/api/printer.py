@@ -93,6 +93,37 @@ def _format_inventory(report_data: dict) -> bytes:
     return p.output
 
 
+def _low_stock_section(p, title: str, items: list, empty_msg: str, ident_of, COLS: int) -> None:
+    """Render one low-stock section (Groups or Products): a title, a have/need/short header,
+    one row per entry (name wrapped), or an empty-state line. ``ident_of(item)`` yields the
+    display name for the leftmost column."""
+    divider = "-" * COLS
+    p.set(align="left", bold=True)
+    p.text(title + "\n")
+    p.set(align="left", bold=False)
+
+    if not items:
+        p.text(empty_msg + "\n")
+        p.text(divider + "\n")
+        return
+
+    header_right = f"  {'Have':>{HAVE_WIDTH}}  {'Need':>{NEED_WIDTH}}  {'Short':>{SHORT_WIDTH}}"
+    p.text(_row("Name", header_right, COLS) + "\n")
+    for item in items:
+        ident = ident_of(item)
+        right = (
+            f"  {item['have']:>{HAVE_WIDTH}}"
+            f"  {item['need']:>{NEED_WIDTH}}"
+            f"  {item['short']:>{SHORT_WIDTH}}"
+        )
+        id_width = COLS - len(right)
+        lines = textwrap.wrap(ident, id_width, subsequent_indent=' ') or [""]
+        p.text(_row(lines[0], right, COLS) + "\n")
+        for cont in lines[1:]:
+            p.text(cont + "\n")
+    p.text(divider + "\n")
+
+
 def _format_low_stock(report_data: dict) -> bytes:
     p = Dummy(magic_encode_args={"disabled": True, "encoding": "CP437"})
     COLS = p.profile.get_columns(font="a")
@@ -106,38 +137,15 @@ def _format_low_stock(report_data: dict) -> bytes:
     p.text(f"{now}\n")
     p.text(divider + "\n")
 
-    header_right = f"  {'Have':>{HAVE_WIDTH}}  {'Need':>{NEED_WIDTH}}  {'Short':>{SHORT_WIDTH}}"
-    p.set(align="left")
-    p.text(_row("Product", header_right, COLS) + "\n")
-    p.text(divider + "\n")
+    _low_stock_section(
+        p, "GROUPS", report_data["groups"], "No groups below minimum",
+        lambda it: it["name"], COLS,
+    )
+    _low_stock_section(
+        p, "PRODUCTS", report_data["products"], "No products below minimum",
+        lambda it: _identifier(it["name"], it["brand"], ""), COLS,
+    )
 
-    items = report_data["items"]
-
-    if not items:
-        p.set(align="center")
-        p.text("All items in stock\n")
-        p.cut()
-        return p.output
-
-    items = sorted(items, key=lambda it: _identifier(it["name"], it["brand"], "").lower())
-
-    for item in items:
-        ident = _identifier(item["name"], item["brand"], "")
-        right = (
-            f"  {item['quantity']:>{HAVE_WIDTH}}"
-            f"  {item['minimum_quantity']:>{NEED_WIDTH}}"
-            f"  {item['shortfall']:>{SHORT_WIDTH}}"
-        )
-        id_width = COLS - len(right)
-        lines = textwrap.wrap(ident, id_width, subsequent_indent=' ')
-        p.set(align="left")
-        p.text(_row(lines[0], right, COLS) + "\n")
-        for cont in lines[1:]:
-            p.text(cont + "\n")
-
-    p.text(divider + "\n")
-    count = len(items)
-    p.text(f"{count} item{'s' if count != 1 else ''} below minimum\n")
     p.cut()
     return p.output
 

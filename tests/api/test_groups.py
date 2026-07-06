@@ -1,13 +1,17 @@
-"""Resolver + cycle-prevention tests for src/api/groups.py (Sprint 2, Phase 2a).
+"""Resolver + cycle-prevention tests for src/api/groups.py and the
+groups HTTP surface in src/api/routers/groups.py.
 
 Runs over a real in-memory SQLite connection (schema applied, PRAGMA foreign_keys = ON,
-sqlite3.Row factory) — the resolver is real SQL, so exercise it against real rows, never
-mocks.
+sqlite3.Row factory) — the resolver and edge logic are real SQL, so exercise them against
+real rows, never mocks.
 """
 import sqlite3
+from unittest.mock import patch
 
 import pytest
+from starlette.testclient import TestClient
 
+from src.api.dependencies import get_db, verify_api_key
 from src.api.groups import (
     GroupResolution,
     is_low_stock,
@@ -16,6 +20,7 @@ from src.api.groups import (
     shortfall,
     would_create_cycle,
 )
+from src.api.main import app
 
 _RID = 1  # retailer id (Sainsbury's seed)
 
@@ -25,6 +30,7 @@ CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
 CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id));
 CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0));
 CREATE TABLE group_variant_members (group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, PRIMARY KEY (group_id, barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id) ON DELETE CASCADE);
 CREATE TABLE group_group_members (parent_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, child_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, PRIMARY KEY (parent_group_id, child_group_id), CHECK (parent_group_id != child_group_id));
@@ -270,3 +276,371 @@ def test_cycle_valid_edge_allowed(db):
     # A -> C closes no loop; B -> C closes no loop.
     assert would_create_cycle(db, 1, 3) is False
     assert would_create_cycle(db, 2, 3) is False
+
+
+# =======================================================================================
+# HTTP surface — group CRUD, membership (group side), read endpoints
+# =======================================================================================
+
+
+@pytest.fixture
+def client(db):
+    def override_get_db():
+        try:
+            yield db
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.state.sainsburys_retailer_id = _RID
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_no_auth(db):
+    def override_get_db():
+        try:
+            yield db
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.state.sainsburys_retailer_id = _RID
+    with patch("src.api.dependencies._API_KEY", "test-secret"):
+        yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+# --- Group CRUD ------------------------------------------------------------------------
+
+def test_create_group(client, db):
+    resp = client.post("/groups", json={"name": "Beans", "minimum_quantity": 5})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "Beans"
+    assert body["minimum_quantity"] == 5
+    gid = body["id"]
+    row = db.execute("SELECT name, minimum_quantity FROM product_groups WHERE id=?", (gid,)).fetchone()
+    assert row["name"] == "Beans" and row["minimum_quantity"] == 5
+
+
+def test_create_group_default_minimum(client):
+    resp = client.post("/groups", json={"name": "Organisational"})
+    assert resp.status_code == 200
+    assert resp.json()["minimum_quantity"] == 0
+
+
+def test_create_group_duplicate_name_409(client):
+    client.post("/groups", json={"name": "Beans"})
+    resp = client.post("/groups", json={"name": "Beans"})
+    assert resp.status_code == 409
+    assert resp.json() == {"error": "group_name_conflict"}
+
+
+def test_rename_group(client, db):
+    gid = client.post("/groups", json={"name": "Old"}).json()["id"]
+    resp = client.patch(f"/groups/{gid}", json={"name": "New"})
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "New"
+    assert db.execute("SELECT name FROM product_groups WHERE id=?", (gid,)).fetchone()["name"] == "New"
+
+
+def test_rename_group_conflict_409(client):
+    client.post("/groups", json={"name": "A"})
+    gid_b = client.post("/groups", json={"name": "B"}).json()["id"]
+    resp = client.patch(f"/groups/{gid_b}", json={"name": "A"})
+    assert resp.status_code == 409
+    assert resp.json() == {"error": "group_name_conflict"}
+
+
+def test_update_group_unknown_404(client):
+    resp = client.patch("/groups/999", json={"name": "X"})
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "group_not_found"}
+
+
+def test_set_minimum(client):
+    gid = client.post("/groups", json={"name": "G", "minimum_quantity": 0}).json()["id"]
+    resp = client.patch(f"/groups/{gid}", json={"minimum_quantity": 4})
+    assert resp.status_code == 200
+    assert resp.json()["minimum_quantity"] == 4
+
+
+def test_clear_minimum_makes_never_low(client, db):
+    """Setting minimum to 0 clears it: the group is organisational-only and never low."""
+    _variant(db, "b1", 1)
+    gid = client.post("/groups", json={"name": "G", "minimum_quantity": 5}).json()["id"]
+    client.post(f"/groups/{gid}/variants", json={"barcode": "b1"})
+    # Below minimum now:
+    assert client.get(f"/groups/{gid}").json()["low_stock"] is True
+    # Clear it:
+    client.patch(f"/groups/{gid}", json={"minimum_quantity": 0})
+    detail = client.get(f"/groups/{gid}").json()
+    assert detail["minimum_quantity"] == 0
+    assert detail["low_stock"] is False
+
+
+def test_delete_group_edges_only(client, db):
+    """Deleting a group removes only its edges (as parent and as child); its members,
+    sub-groups, and any other group it belonged to survive."""
+    _variant(db, "b1")
+    # g_parent -> g_mid -> (variant b1); g_mid also a member of g_other.
+    gp = client.post("/groups", json={"name": "parent"}).json()["id"]
+    gm = client.post("/groups", json={"name": "mid"}).json()["id"]
+    go = client.post("/groups", json={"name": "other"}).json()["id"]
+    client.post(f"/groups/{gp}/subgroups", json={"child_group_id": gm})
+    client.post(f"/groups/{go}/subgroups", json={"child_group_id": gm})
+    client.post(f"/groups/{gm}/variants", json={"barcode": "b1"})
+
+    resp = client.delete(f"/groups/{gm}")
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": gm}
+
+    # gm gone; its former parent gp and go survive; variant b1 survives; the b1 edge (child of gm)
+    # is gone with gm, but the variant row itself remains.
+    assert db.execute("SELECT 1 FROM product_groups WHERE id=?", (gm,)).fetchone() is None
+    assert db.execute("SELECT 1 FROM product_groups WHERE id=?", (gp,)).fetchone() is not None
+    assert db.execute("SELECT 1 FROM product_groups WHERE id=?", (go,)).fetchone() is not None
+    assert db.execute("SELECT 1 FROM product_variants WHERE barcode='b1'").fetchone() is not None
+    # No dangling edges referencing gm:
+    assert db.execute(
+        "SELECT 1 FROM group_group_members WHERE parent_group_id=? OR child_group_id=?", (gm, gm)
+    ).fetchone() is None
+    assert db.execute("SELECT 1 FROM group_variant_members WHERE group_id=?", (gm,)).fetchone() is None
+
+
+def test_delete_group_unknown_404(client):
+    resp = client.delete("/groups/999")
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "group_not_found"}
+
+
+# --- Membership: variants --------------------------------------------------------------
+
+def test_add_variant_upserts_null_row(client, db):
+    """A barcode with a barcodes row but no product_variants row: add upserts a null-data row."""
+    db.execute("INSERT INTO barcodes (barcode) VALUES ('b1')")
+    db.commit()
+    gid = client.post("/groups", json={"name": "G"}).json()["id"]
+    resp = client.post(f"/groups/{gid}/variants", json={"barcode": "b1"})
+    assert resp.status_code == 200
+    pv = db.execute("SELECT name FROM product_variants WHERE barcode='b1' AND retailer_id=?", (_RID,)).fetchone()
+    assert pv is not None and pv["name"] is None
+    edge = db.execute(
+        "SELECT 1 FROM group_variant_members WHERE group_id=? AND barcode='b1'", (gid,)
+    ).fetchone()
+    assert edge is not None
+
+
+def test_add_variant_unknown_barcode_404(client):
+    gid = client.post("/groups", json={"name": "G"}).json()["id"]
+    resp = client.post(f"/groups/{gid}/variants", json={"barcode": "99999999"})
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "barcode_not_found"}
+
+
+def test_add_variant_unknown_group_404(client, db):
+    db.execute("INSERT INTO barcodes (barcode) VALUES ('b1')")
+    db.commit()
+    resp = client.post("/groups/999/variants", json={"barcode": "b1"})
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "group_not_found"}
+
+
+def test_add_variant_idempotent(client, db):
+    _variant(db, "b1")
+    gid = client.post("/groups", json={"name": "G"}).json()["id"]
+    assert client.post(f"/groups/{gid}/variants", json={"barcode": "b1"}).status_code == 200
+    assert client.post(f"/groups/{gid}/variants", json={"barcode": "b1"}).status_code == 200
+    count = db.execute(
+        "SELECT COUNT(*) c FROM group_variant_members WHERE group_id=? AND barcode='b1'", (gid,)
+    ).fetchone()["c"]
+    assert count == 1
+
+
+def test_remove_variant_edge_only(client, db):
+    _variant(db, "b1")
+    gid = client.post("/groups", json={"name": "G"}).json()["id"]
+    client.post(f"/groups/{gid}/variants", json={"barcode": "b1"})
+    resp = client.delete(f"/groups/{gid}/variants/b1")
+    assert resp.status_code == 200
+    assert db.execute("SELECT 1 FROM group_variant_members WHERE group_id=?", (gid,)).fetchone() is None
+    assert db.execute("SELECT 1 FROM product_variants WHERE barcode='b1'").fetchone() is not None
+    assert db.execute("SELECT 1 FROM product_groups WHERE id=?", (gid,)).fetchone() is not None
+
+
+def test_remove_variant_unknown_group_404(client, db):
+    _variant(db, "b1")
+    resp = client.delete("/groups/999/variants/b1")
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "group_not_found"}
+
+
+def test_remove_variant_valid_nonmember_noop(client, db):
+    _variant(db, "b1")
+    gid = client.post("/groups", json={"name": "G"}).json()["id"]
+    resp = client.delete(f"/groups/{gid}/variants/b1")
+    assert resp.status_code == 200
+
+
+# --- Membership: sub-groups ------------------------------------------------------------
+
+def test_add_subgroup(client, db):
+    a = client.post("/groups", json={"name": "A"}).json()["id"]
+    b = client.post("/groups", json={"name": "B"}).json()["id"]
+    resp = client.post(f"/groups/{a}/subgroups", json={"child_group_id": b})
+    assert resp.status_code == 200
+    assert db.execute(
+        "SELECT 1 FROM group_group_members WHERE parent_group_id=? AND child_group_id=?", (a, b)
+    ).fetchone() is not None
+
+
+def test_add_subgroup_self_rejected(client, db):
+    a = client.post("/groups", json={"name": "A"}).json()["id"]
+    resp = client.post(f"/groups/{a}/subgroups", json={"child_group_id": a})
+    assert resp.status_code == 409
+    assert resp.json() == {"error": "cycle_detected"}
+    # No partial write.
+    assert db.execute("SELECT COUNT(*) c FROM group_group_members").fetchone()["c"] == 0
+
+
+def test_add_subgroup_cycle_rejected(client, db):
+    a = client.post("/groups", json={"name": "A"}).json()["id"]
+    b = client.post("/groups", json={"name": "B"}).json()["id"]
+    c = client.post("/groups", json={"name": "C"}).json()["id"]
+    client.post(f"/groups/{a}/subgroups", json={"child_group_id": b})  # A -> B
+    client.post(f"/groups/{b}/subgroups", json={"child_group_id": c})  # B -> C
+    resp = client.post(f"/groups/{c}/subgroups", json={"child_group_id": a})  # C -> A closes loop
+    assert resp.status_code == 409
+    assert resp.json() == {"error": "cycle_detected"}
+    assert db.execute(
+        "SELECT 1 FROM group_group_members WHERE parent_group_id=? AND child_group_id=?", (c, a)
+    ).fetchone() is None
+
+
+def test_add_subgroup_unknown_group_404(client):
+    a = client.post("/groups", json={"name": "A"}).json()["id"]
+    resp = client.post(f"/groups/{a}/subgroups", json={"child_group_id": 999})
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "group_not_found"}
+
+
+def test_remove_subgroup(client, db):
+    a = client.post("/groups", json={"name": "A"}).json()["id"]
+    b = client.post("/groups", json={"name": "B"}).json()["id"]
+    client.post(f"/groups/{a}/subgroups", json={"child_group_id": b})
+    resp = client.delete(f"/groups/{a}/subgroups/{b}")
+    assert resp.status_code == 200
+    assert db.execute("SELECT 1 FROM group_group_members").fetchone() is None
+    # Both groups survive.
+    assert db.execute("SELECT 1 FROM product_groups WHERE id=?", (a,)).fetchone() is not None
+    assert db.execute("SELECT 1 FROM product_groups WHERE id=?", (b,)).fetchone() is not None
+
+
+def test_remove_subgroup_unknown_group_404(client):
+    a = client.post("/groups", json={"name": "A"}).json()["id"]
+    resp = client.delete(f"/groups/{a}/subgroups/999")
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "group_not_found"}
+
+
+def test_membership_both_directions(client, db):
+    """Add from the group side; read the membership back from the product side (same edge table)."""
+    _variant(db, "b1")
+    gid = client.post("/groups", json={"name": "Beans"}).json()["id"]
+    client.post(f"/groups/{gid}/variants", json={"barcode": "b1"})
+    detail = client.get("/products/b1").json()
+    assert {"id": gid, "name": "Beans"} in detail["groups"]
+
+
+# --- Read endpoints --------------------------------------------------------------------
+
+def test_list_groups(client, db):
+    _variant(db, "b1", 2)
+    gid = client.post("/groups", json={"name": "G", "minimum_quantity": 5}).json()["id"]
+    client.post(f"/groups/{gid}/variants", json={"barcode": "b1"})
+    resp = client.get("/groups")
+    assert resp.status_code == 200
+    groups = resp.json()["groups"]
+    assert len(groups) == 1
+    g = groups[0]
+    assert g["group_id"] == gid
+    assert g["total_quantity"] == 2
+    assert g["minimum_quantity"] == 5
+    assert g["low_stock"] is True
+    assert g["shortfall"] == 3
+
+
+def test_group_detail(client, db):
+    _variant(db, "b1", 4)
+    parent = client.post("/groups", json={"name": "Parent", "minimum_quantity": 10}).json()["id"]
+    child = client.post("/groups", json={"name": "Child"}).json()["id"]
+    client.post(f"/groups/{parent}/subgroups", json={"child_group_id": child})
+    client.post(f"/groups/{parent}/variants", json={"barcode": "b1"})
+
+    resp = client.get(f"/groups/{parent}")
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["group_id"] == parent
+    assert d["total_quantity"] == 4
+    assert d["minimum_quantity"] == 10
+    assert d["low_stock"] is True
+    assert [v["barcode"] for v in d["variants"]] == ["b1"]
+    assert d["subgroups"] == [{"id": child, "name": "Child"}]
+
+
+def test_group_detail_unknown_404(client):
+    resp = client.get("/groups/999")
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "group_not_found"}
+
+
+def test_group_detail_diamond_dedup(client, db):
+    """resolve_group dedups a diamond-shaped nesting: shared variant counted once."""
+    _variant(db, "shared", 5)
+    root = client.post("/groups", json={"name": "root"}).json()["id"]
+    a = client.post("/groups", json={"name": "a"}).json()["id"]
+    b = client.post("/groups", json={"name": "b"}).json()["id"]
+    leaf = client.post("/groups", json={"name": "leaf"}).json()["id"]
+    client.post(f"/groups/{root}/subgroups", json={"child_group_id": a})
+    client.post(f"/groups/{root}/subgroups", json={"child_group_id": b})
+    client.post(f"/groups/{a}/subgroups", json={"child_group_id": leaf})
+    client.post(f"/groups/{b}/subgroups", json={"child_group_id": leaf})
+    client.post(f"/groups/{leaf}/variants", json={"barcode": "shared"})
+
+    assert client.get(f"/groups/{root}").json()["total_quantity"] == 5  # not 10
+
+
+def test_group_detail_null_variant_renders(client, db):
+    """A null-data variant member (no name/brand) still renders in group detail."""
+    db.execute("INSERT INTO barcodes (barcode) VALUES ('b1')")
+    db.commit()
+    gid = client.post("/groups", json={"name": "G"}).json()["id"]
+    client.post(f"/groups/{gid}/variants", json={"barcode": "b1"})
+    resp = client.get(f"/groups/{gid}")
+    assert resp.status_code == 200
+    v = resp.json()["variants"][0]
+    assert v["barcode"] == "b1"
+    assert v["name"] is None and v["brand"] is None
+
+
+# --- Auth coverage ---------------------------------------------------------------------
+
+def test_all_new_routes_require_auth(client_no_auth):
+    """Every new route returns 401 without an X-API-Key header."""
+    calls = [
+        ("post", "/groups", {"json": {"name": "X"}}),
+        ("patch", "/groups/1", {"json": {"name": "Y"}}),
+        ("delete", "/groups/1", {}),
+        ("post", "/groups/1/variants", {"json": {"barcode": "12345678"}}),
+        ("delete", "/groups/1/variants/12345678", {}),
+        ("post", "/groups/1/subgroups", {"json": {"child_group_id": 2}}),
+        ("delete", "/groups/1/subgroups/2", {}),
+        ("get", "/groups", {}),
+        ("get", "/groups/1", {}),
+    ]
+    for method, url, kwargs in calls:
+        resp = getattr(client_no_auth, method)(url, **kwargs)
+        assert resp.status_code == 401, f"{method} {url} -> {resp.status_code}"
