@@ -157,7 +157,6 @@ def test_worker_state_seed_row_exists(db):
 
 def test_migration_discards_pending_lookups_rows():
     import tempfile
-    import os
     from alembic.config import Config
     from alembic import command
 
@@ -199,11 +198,10 @@ def test_migration_discards_pending_lookups_rows():
         assert ws is not None
         conn.close()
     finally:
-        os.unlink(db_path)
+        _safe_unlink(db_path)
 
 
 def test_migration_fresh_db():
-    import os
     import tempfile
 
     from alembic import command
@@ -234,12 +232,11 @@ def test_migration_fresh_db():
         assert ws["off_last_called_at"] == "1970-01-01T00:00:00"
         conn.close()
     finally:
-        os.unlink(db_path)
+        _safe_unlink(db_path)
 
 
 def test_migration_drops_legacy_scan_events_and_config():
     """605be7ba628c drops scan_events and config; downgrade recreates their structure."""
-    import os
     import tempfile
 
     from alembic import command
@@ -284,7 +281,7 @@ def test_migration_drops_legacy_scan_events_and_config():
         assert "config" in restored
         conn.close()
     finally:
-        os.unlink(db_path)
+        _safe_unlink(db_path)
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +346,6 @@ def _partial_index_sql(conn, name: str) -> str | None:
 
 def test_rekey_upgrade_shapes_data_and_constraints():
     """1b upgrade: composite PKs/FKs, partial indexes, backfill, fk_check clean, CHECK survives."""
-    import os
     import tempfile
 
     from alembic import command
@@ -425,12 +421,11 @@ def test_rekey_upgrade_shapes_data_and_constraints():
             )
         conn.close()
     finally:
-        os.unlink(db_path)
+        _safe_unlink(db_path)
 
 
 def test_rekey_downgrade_roundtrip_preserves_data():
     """upgrade -> downgrade -> upgrade preserves data and restores original PKs/FKs on downgrade."""
-    import os
     import tempfile
 
     from alembic import command
@@ -475,12 +470,11 @@ def test_rekey_downgrade_roundtrip_preserves_data():
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         conn.close()
     finally:
-        os.unlink(db_path)
+        _safe_unlink(db_path)
 
 
 def test_rekey_idempotent_second_run_is_noop():
     """Re-running upgrade after a manual stamp is a clean no-op via the already-applied guard."""
-    import os
     import tempfile
 
     from alembic import command
@@ -513,7 +507,7 @@ def test_rekey_idempotent_second_run_is_noop():
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         conn.close()
     finally:
-        os.unlink(db_path)
+        _safe_unlink(db_path)
 
 
 # ---------------------------------------------------------------------------
@@ -583,7 +577,6 @@ def _build_post_1b_db(db_path):
 def test_move_min_upgrade_backfills_carries_and_drops():
     """1c upgrade: pv.minimum_quantity added + backfilled, orphan minimum carried as a
     null-data variant row, zero-minimum orphan skipped, inventory.minimum_quantity dropped."""
-    import os
     import tempfile
 
     from alembic import command
@@ -629,14 +622,13 @@ def test_move_min_upgrade_backfills_carries_and_drops():
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         conn.close()
     finally:
-        os.unlink(db_path)
+        _safe_unlink(db_path)
 
 
 def test_move_min_downgrade_roundtrip_restores_inventory_minimums():
     """upgrade -> downgrade restores inventory.minimum_quantity for the common case;
     re-upgrade moves it back. (Orphan-carry rows persist as null-data variant rows — a
     documented, accepted downgrade artifact.)"""
-    import os
     import tempfile
 
     from alembic import command
@@ -680,13 +672,12 @@ def test_move_min_downgrade_roundtrip_restores_inventory_minimums():
         assert not _has_column(conn, "inventory", "minimum_quantity")
         conn.close()
     finally:
-        os.unlink(db_path)
+        _safe_unlink(db_path)
 
 
 def test_move_min_idempotent_rerun_is_noop():
     """Re-running the 1c upgrade after a completed move (inventory column already dropped)
     is a clean no-op via the column-presence guards; data is untouched."""
-    import os
     import tempfile
 
     from alembic import command
@@ -720,4 +711,307 @@ def test_move_min_idempotent_rerun_is_noop():
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         conn.close()
     finally:
-        os.unlink(db_path)
+        _safe_unlink(db_path)
+
+
+# ---------------------------------------------------------------------------
+# 2a: product-groups data model (revision 9b7941042b52)
+# ---------------------------------------------------------------------------
+
+_2A_REV = "9b7941042b52"
+
+# Schema as of the head 2a chains off (66c63d972d98): product_variants carries
+# minimum_quantity and inventory does not (dropped in 1c). Built inline because
+# current_schema.sql is now the *post-2a* shape. The product_variants PRIMARY KEY is copied
+# verbatim from the head schema — (barcode, retailer_id), in that order — so the new
+# group_variant_members composite FK resolves at insert time (a mismatched order would raise
+# `foreign key mismatch`).
+_PRE_2A_SCHEMA = """
+PRAGMA foreign_keys = ON;
+CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit' CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
+CREATE INDEX idx_session_items_info_pending ON session_items(first_scanned_at) WHERE info_status = 'pending';
+CREATE INDEX idx_session_items_price_pending ON session_items(first_scanned_at) WHERE price_status = 'pending';
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
+INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
+"""
+
+
+def _safe_unlink(db_path):
+    """Best-effort temp-DB cleanup. On Windows a SQLite/WAL handle can linger briefly after
+    the last connection closes, transiently locking the file; force a GC and retry, then give
+    up silently (the OS reclaims %TEMP%)."""
+    import gc
+    import os
+    import time
+
+    for _ in range(20):
+        try:
+            os.unlink(db_path)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            gc.collect()
+            time.sleep(0.1)
+
+
+def _build_pre_2a_db(db_path):
+    conn = sqlite3.connect(db_path)
+    for stmt in [s.strip() for s in _PRE_2A_SCHEMA.split(";") if s.strip()]:
+        conn.execute(stmt)
+    conn.commit()
+    conn.close()
+
+
+def _upgrade_to_2a_head(db_path):
+    from alembic import command
+    from alembic.config import Config
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.stamp(alembic_cfg, _MOVE_MIN_REV)
+    command.upgrade(alembic_cfg, "head")
+    return alembic_cfg
+
+
+def _seed_2a_members(conn):
+    """Two variants, three groups, edges g3 -> g1 -> {g2, v1} and g2 -> v2."""
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000001'), ('5000000000002')")
+    conn.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name) "
+        "VALUES ('5000000000001', 1, 'V1'), ('5000000000002', 1, 'V2')"
+    )
+    conn.execute("INSERT INTO product_groups (id, name) VALUES (1, 'g1'), (2, 'g2'), (3, 'g3')")
+    conn.execute(
+        "INSERT INTO group_variant_members (group_id, barcode, retailer_id) "
+        "VALUES (1, '5000000000001', 1), (2, '5000000000002', 1)"
+    )
+    conn.execute(
+        "INSERT INTO group_group_members (parent_group_id, child_group_id) "
+        "VALUES (1, 2), (3, 1)"
+    )
+    conn.commit()
+
+
+def test_2a_creates_group_tables_and_constraints():
+    """product_groups + edge tables exist with the approved shape, cascade FKs, self-edge and
+    non-negative-minimum CHECKs, and a parent-side (PK) index for the recursive walk."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_2a_db(db_path)
+        _upgrade_to_2a_head(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert {"product_groups", "group_variant_members", "group_group_members"} <= tables
+
+        # product_groups shape.
+        pg_cols = {r["name"]: r for r in conn.execute("PRAGMA table_info('product_groups')").fetchall()}
+        assert pg_cols["id"]["pk"] == 1
+        assert pg_cols["name"]["notnull"] == 1
+        assert pg_cols["minimum_quantity"]["notnull"] == 1
+        assert pg_cols["minimum_quantity"]["dflt_value"] in ("0", 0)
+        # name is UNIQUE (an index exists for it).
+        pg_idx = conn.execute("PRAGMA index_list('product_groups')").fetchall()
+        assert any(r["unique"] for r in pg_idx)
+
+        # Edge FK targets + ON DELETE CASCADE on every edge FK.
+        gvm_fks = conn.execute("PRAGMA foreign_key_list('group_variant_members')").fetchall()
+        assert {r["table"] for r in gvm_fks} == {"product_groups", "product_variants"}
+        assert all(r["on_delete"] == "CASCADE" for r in gvm_fks)
+        ggm_fks = conn.execute("PRAGMA foreign_key_list('group_group_members')").fetchall()
+        assert {r["table"] for r in ggm_fks} == {"product_groups"}
+        assert all(r["on_delete"] == "CASCADE" for r in ggm_fks)
+
+        # Parent-side recursive-walk index: leftmost PK column, shown by index_list (origin 'pk').
+        ggm_idx = conn.execute("PRAGMA index_list('group_group_members')").fetchall()
+        assert any(r["origin"] == "pk" for r in ggm_idx)
+        gvm_idx = conn.execute("PRAGMA index_list('group_variant_members')").fetchall()
+        assert any(r["origin"] == "pk" for r in gvm_idx)
+
+        conn.execute("INSERT INTO product_groups (id, name) VALUES (1, 'grp')")
+        # CHECK(minimum_quantity >= 0).
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO product_groups (name, minimum_quantity) VALUES ('bad', -1)")
+        # Self-edge CHECK(parent_group_id != child_group_id).
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO group_group_members (parent_group_id, child_group_id) VALUES (1, 1)")
+        # name UNIQUE.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO product_groups (name) VALUES ('grp')")
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_2a_cascade_edges_only():
+    """Deleting a group removes only its edges (parent- and child-side); deleting a variant
+    removes its variant edges. Other groups and variants survive. FK enforcement is on."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_2a_db(db_path)
+        _upgrade_to_2a_head(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        _seed_2a_members(conn)  # the edge inserts here resolve the composite FK (R1)
+
+        # Delete g1: drops (g1->v1), (g1->g2) [parent-side] and (g3->g1) [child-side] only.
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("DELETE FROM product_groups WHERE id = 1")
+        conn.commit()
+
+        remaining_groups = {r[0] for r in conn.execute("SELECT id FROM product_groups").fetchall()}
+        assert remaining_groups == {2, 3}  # g2, g3 (child group + parent group) survive
+        # Member variants untouched.
+        assert conn.execute("SELECT COUNT(*) FROM product_variants").fetchone()[0] == 2
+        # Only the g2->v2 variant edge remains; all group-group edges are gone.
+        assert [tuple(r) for r in conn.execute(
+            "SELECT group_id, barcode FROM group_variant_members"
+        ).fetchall()] == [(2, "5000000000002")]
+        assert conn.execute("SELECT COUNT(*) FROM group_group_members").fetchone()[0] == 0
+
+        # Delete a variant: drops the edge referencing it, leaves the group.
+        conn.execute("DELETE FROM product_variants WHERE barcode = '5000000000002'")
+        conn.commit()
+        assert conn.execute("SELECT COUNT(*) FROM group_variant_members").fetchone()[0] == 0
+        assert {r[0] for r in conn.execute("SELECT id FROM product_groups").fetchall()} == {2, 3}
+
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_2a_downgrade_roundtrip():
+    """upgrade -> downgrade drops the 2a tables -> re-upgrade recreates them."""
+    import tempfile
+
+    from alembic import command
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_2a_db(db_path)
+        alembic_cfg = _upgrade_to_2a_head(db_path)
+
+        def _tables():
+            c = sqlite3.connect(db_path)
+            names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            c.close()
+            return names
+
+        assert {"product_groups", "group_variant_members", "group_group_members"} <= _tables()
+
+        command.downgrade(alembic_cfg, _MOVE_MIN_REV)
+        after = _tables()
+        assert not ({"product_groups", "group_variant_members", "group_group_members"} & after)
+        # Pre-2a tables still present (downgrade touched only the 2a objects).
+        assert {"product_variants", "inventory", "session_items"} <= after
+
+        command.upgrade(alembic_cfg, "head")
+        assert {"product_groups", "group_variant_members", "group_group_members"} <= _tables()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_2a_idempotent_partial_apply():
+    """CREATE ... IF NOT EXISTS: with product_groups already present (a simulated partial
+    apply), upgrade completes cleanly and creates the remaining objects."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_2a_db(db_path)
+
+        # Simulate a crash mid-migration: product_groups created, edge tables not yet.
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "CREATE TABLE product_groups ("
+            " id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE,"
+            " minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0))"
+        )
+        conn.commit()
+        conn.close()
+
+        _upgrade_to_2a_head(db_path)  # stamp 66c + upgrade head — must not error
+
+        tables = _tables_of(db_path)
+        assert {"product_groups", "group_variant_members", "group_group_members"} <= tables
+    finally:
+        _safe_unlink(db_path)
+
+
+def _tables_of(db_path):
+    conn = sqlite3.connect(db_path)
+    names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    conn.close()
+    return names
+
+
+def _table_shape(conn, table):
+    """(table_info, foreign_key_list, index_list) as comparable tuple lists for one table."""
+    ti = [tuple(r) for r in conn.execute(f"PRAGMA table_info('{table}')").fetchall()]
+    fk = [(r[2], r[3], r[4], r[6]) for r in conn.execute(f"PRAGMA foreign_key_list('{table}')").fetchall()]
+    idx = [(r[1], r[2], r[3]) for r in conn.execute(f"PRAGMA index_list('{table}')").fetchall()]
+    return ti, sorted(fk), sorted(idx)
+
+
+def test_2a_current_schema_matches_migrated():
+    """current_schema.sql's 2a tables match a freshly-migrated DB (table_info + FK list +
+    index_list), and initial_schema.sql is unchanged."""
+    import subprocess
+    import tempfile
+
+    new_tables = ("product_groups", "group_variant_members", "group_group_members")
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_2a_db(db_path)
+        _upgrade_to_2a_head(db_path)
+        migrated = sqlite3.connect(db_path)
+
+        # Build a doc DB from just the 2a CREATE statements in current_schema.sql (they are the
+        # trailing block). FK-to-product_variants is unvalidated at CREATE time, so the three
+        # tables stand alone for schema introspection.
+        schema_path = Path(__file__).parents[2] / "src" / "db" / "current_schema.sql"
+        schema_text = schema_path.read_text()
+        doc_ddl = schema_text[schema_text.index("CREATE TABLE product_groups"):]
+        doc = sqlite3.connect(":memory:")
+        doc.executescript(doc_ddl)
+
+        for t in new_tables:
+            assert _table_shape(migrated, t) == _table_shape(doc, t), t
+        migrated.close()
+        doc.close()
+
+        # initial_schema.sql is frozen — no working-tree diff vs HEAD.
+        repo_root = Path(__file__).parents[2]
+        result = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", "src/db/initial_schema.sql"],
+            cwd=repo_root,
+        )
+        assert result.returncode == 0, "initial_schema.sql must remain unchanged"
+    finally:
+        _safe_unlink(db_path)
