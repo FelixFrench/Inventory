@@ -275,7 +275,7 @@ def test_put_minimum_quantity_requires_auth(client_no_auth, db):
 
 
 # ---------------------------------------------------------------------------
-# GET /products/{barcode} — product detail
+# GET /products/{barcode}/{retailer_id} — product detail
 # ---------------------------------------------------------------------------
 
 def test_product_detail_full(client, db):
@@ -290,7 +290,7 @@ def test_product_detail_full(client, db):
         INSERT INTO product_groups (id, name, minimum_quantity) VALUES (7, 'Beans', 5);
         INSERT INTO group_variant_members (group_id, barcode, retailer_id) VALUES (7, '5014788110140', 1);
     """)
-    resp = client.get("/products/5014788110140")
+    resp = client.get("/products/5014788110140/1")
     assert resp.status_code == 200
     d = resp.json()
     assert d["barcode"] == "5014788110140"
@@ -309,7 +309,7 @@ def test_product_detail_nulls_render(client, db):
     """A barcode with no product_variants/inventory/prices row still renders (all nullable)."""
     db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
     db.commit()
-    resp = client.get("/products/5014788110140")
+    resp = client.get("/products/5014788110140/1")
     assert resp.status_code == 200
     d = resp.json()
     assert d["name"] is None
@@ -323,20 +323,38 @@ def test_product_detail_nulls_render(client, db):
 
 
 def test_product_detail_not_found(client):
-    resp = client.get("/products/0000000000000")
+    resp = client.get("/products/0000000000000/1")
     assert resp.status_code == 404
     assert resp.json() == {"error": "barcode_not_found"}
+
+
+def test_product_detail_unknown_retailer_404(client, db):
+    """A valid barcode with a nonexistent retailer_id returns 404 retailer_not_found (not a
+    misleading all-null 200)."""
+    db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
+    db.commit()
+    resp = client.get("/products/5014788110140/999")
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "retailer_not_found"}
+
+
+def test_product_detail_non_numeric_retailer_422(client, db):
+    """A non-numeric retailer_id segment fails int path validation (422)."""
+    db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
+    db.commit()
+    resp = client.get("/products/5014788110140/abc")
+    assert resp.status_code == 422
 
 
 def test_product_detail_requires_auth(client_no_auth, db):
     db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
     db.commit()
-    resp = client_no_auth.get("/products/5014788110140")
+    resp = client_no_auth.get("/products/5014788110140/1")
     assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
-# Product-side membership: POST/DELETE /products/{barcode}/groups
+# Product-side membership: POST/DELETE /products/{barcode}/{retailer_id}/groups
 # ---------------------------------------------------------------------------
 
 def test_product_add_group_membership(client, db):
@@ -344,7 +362,7 @@ def test_product_add_group_membership(client, db):
         INSERT INTO barcodes VALUES ('5014788110140');
         INSERT INTO product_groups (id, name) VALUES (1, 'G');
     """)
-    resp = client.post("/products/5014788110140/groups", json={"group_id": 1})
+    resp = client.post("/products/5014788110140/1/groups", json={"group_id": 1})
     assert resp.status_code == 200
     # Edge exists, and a null-data variant row was upserted.
     edge = db.execute(
@@ -360,7 +378,7 @@ def test_product_add_group_membership(client, db):
 def test_product_add_group_unknown_barcode_404(client, db):
     db.execute("INSERT INTO product_groups (id, name) VALUES (1, 'G')")
     db.commit()
-    resp = client.post("/products/0000000000000/groups", json={"group_id": 1})
+    resp = client.post("/products/0000000000000/1/groups", json={"group_id": 1})
     assert resp.status_code == 404
     assert resp.json() == {"error": "barcode_not_found"}
 
@@ -368,9 +386,24 @@ def test_product_add_group_unknown_barcode_404(client, db):
 def test_product_add_group_unknown_group_404(client, db):
     db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
     db.commit()
-    resp = client.post("/products/5014788110140/groups", json={"group_id": 999})
+    resp = client.post("/products/5014788110140/1/groups", json={"group_id": 999})
     assert resp.status_code == 404
     assert resp.json() == {"error": "group_not_found"}
+
+
+def test_product_add_group_unknown_retailer_404(client, db):
+    """An unknown retailer_id is surfaced as retailer_not_found, NOT misattributed to
+    barcode_not_found (the product_variants -> retailers FK would otherwise raise IntegrityError)."""
+    db.executescript("""
+        INSERT INTO barcodes VALUES ('5014788110140');
+        INSERT INTO product_groups (id, name) VALUES (1, 'G');
+    """)
+    resp = client.post("/products/5014788110140/999/groups", json={"group_id": 1})
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "retailer_not_found"}
+    # No edge or variant row was written for the bad retailer.
+    assert db.execute("SELECT 1 FROM group_variant_members").fetchone() is None
+    assert db.execute("SELECT 1 FROM product_variants WHERE retailer_id=999").fetchone() is None
 
 
 def test_product_remove_group_membership(client, db):
@@ -380,7 +413,7 @@ def test_product_remove_group_membership(client, db):
         INSERT INTO product_variants (barcode, retailer_id) VALUES ('5014788110140', 1);
         INSERT INTO group_variant_members (group_id, barcode, retailer_id) VALUES (1, '5014788110140', 1);
     """)
-    resp = client.delete("/products/5014788110140/groups/1")
+    resp = client.delete("/products/5014788110140/1/groups/1")
     assert resp.status_code == 200
     edge = db.execute(
         "SELECT 1 FROM group_variant_members WHERE group_id=1 AND barcode='5014788110140'"
@@ -395,9 +428,19 @@ def test_product_remove_group_unknown_group_404(client, db):
     """A non-existent group id is surfaced (404), not a silent zero-row no-op."""
     db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
     db.commit()
-    resp = client.delete("/products/5014788110140/groups/999")
+    resp = client.delete("/products/5014788110140/1/groups/999")
     assert resp.status_code == 404
     assert resp.json() == {"error": "group_not_found"}
+
+
+def test_product_remove_group_unknown_retailer_404(client, db):
+    db.executescript("""
+        INSERT INTO barcodes VALUES ('5014788110140');
+        INSERT INTO product_groups (id, name) VALUES (1, 'G');
+    """)
+    resp = client.delete("/products/5014788110140/999/groups/1")
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "retailer_not_found"}
 
 
 def test_product_remove_group_valid_nonmember_is_noop(client, db):
@@ -406,7 +449,7 @@ def test_product_remove_group_valid_nonmember_is_noop(client, db):
         INSERT INTO barcodes VALUES ('5014788110140');
         INSERT INTO product_groups (id, name) VALUES (1, 'G');
     """)
-    resp = client.delete("/products/5014788110140/groups/1")
+    resp = client.delete("/products/5014788110140/1/groups/1")
     assert resp.status_code == 200
 
 
@@ -415,5 +458,5 @@ def test_product_add_group_membership_requires_auth(client_no_auth, db):
         INSERT INTO barcodes VALUES ('5014788110140');
         INSERT INTO product_groups (id, name) VALUES (1, 'G');
     """)
-    resp = client_no_auth.post("/products/5014788110140/groups", json={"group_id": 1})
+    resp = client_no_auth.post("/products/5014788110140/1/groups", json={"group_id": 1})
     assert resp.status_code == 401

@@ -551,7 +551,7 @@ def test_membership_both_directions(client, db):
     _variant(db, "b1")
     gid = client.post("/groups", json={"name": "Beans"}).json()["id"]
     client.post(f"/groups/{gid}/variants", json={"barcode": "b1"})
-    detail = client.get("/products/b1").json()
+    detail = client.get("/products/b1/1").json()
     assert {"id": gid, "name": "Beans"} in detail["groups"]
 
 
