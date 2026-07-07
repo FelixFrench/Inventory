@@ -1,6 +1,6 @@
 header { padding: 12px 16px; }
 nav { gap: 4px; padding: 0 8px; }
-nav a { padding: 10px 14px; font-size: 0.9rem; border-bottom: 3px solid transparent; }
+nav a { padding: 10px 14px; border-bottom: 3px solid transparent; }
 nav a.active { border-bottom-color: #4a9eff; }
 main { max-width: 1100px; }
 
