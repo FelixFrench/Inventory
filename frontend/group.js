@@ -28,7 +28,7 @@ function showError(msg) {
 function renderVariants(variants) {
     const list = document.getElementById('variant-list');
     if (!variants.length) {
-        list.innerHTML = '<li class="empty">No variant members.</li>';
+        list.innerHTML = '<li class="empty">No product members.</li>';
         return;
     }
     list.innerHTML = variants.map(v => {
@@ -189,7 +189,7 @@ async function removeVariant(barcode) {
         showToast('Variant removed ✓', 'ok');
         await refresh();
     } catch (_) {
-        showToast('Could not remove variant', 'error');
+        showToast('Could not remove product', 'error');
     }
 }
 
