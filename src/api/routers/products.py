@@ -1,10 +1,10 @@
 import logging
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-from src.api.dependencies import get_db, get_retailer_id
+from src.api.dependencies import get_db
 from src.api.errors import SERVICE_UNAVAILABLE_503 as _503
 from src.api.models import AddGroupMembershipRequest, SetMinimumQuantityRequest
 from src.api.routers.groups import (
@@ -12,6 +12,7 @@ from src.api.routers.groups import (
     remove_variant_from_group,
     run_membership,
 )
+from src.api.urls import group_page_url, off_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Products"])
@@ -32,84 +33,34 @@ def _retailer_missing_response(
     return None
 
 
-@router.get("/products/minimum-quantities", response_model=None)
-def get_minimum_quantities(request: Request, db: sqlite3.Connection = Depends(get_db)) -> dict | JSONResponse:
-    """
-    List all inventory items with their current and minimum quantities.
-
-    Returns product name, brand, quantity, current stock, and minimum stock threshold
-    for every item in inventory, ordered alphabetically by name.
-    """
-    try:
-        retailer_id = request.app.state.sainsburys_retailer_id
-        rows = db.execute(
-            """
-            SELECT
-                inv.barcode,
-                COALESCE(inv.quantity, 0)        AS current_quantity,
-                COALESCE(pv.minimum_quantity, 0) AS minimum_quantity,
-                pv.name,
-                pv.brand,
-                pv.product_quantity
-            FROM inventory inv
-            LEFT JOIN product_variants pv
-                ON pv.barcode = inv.barcode
-                AND pv.retailer_id = inv.retailer_id
-            WHERE inv.retailer_id = ?
-            ORDER BY pv.name ASC NULLS LAST, inv.barcode ASC
-            """,
-            (retailer_id,),
-        ).fetchall()
-        products = [
-            {
-                "barcode": row["barcode"],
-                "name": row["name"],
-                "brand": row["brand"],
-                "quantity": row["product_quantity"],
-                "current_quantity": row["current_quantity"],
-                "minimum_quantity": row["minimum_quantity"],
-            }
-            for row in rows
-        ]
-        return {"products": products}
-    except HTTPException:
-        raise
-    except sqlite3.OperationalError:
-        raise _503
-    except Exception as e:
-        logger.error("DB error fetching minimum quantities: %s", e)
-        return JSONResponse(status_code=500, content={"error": "internal_error"})
-
-
-# NOTE: retailer scoping — this route identifies the variant by `barcode` alone and resolves
-# the retailer via get_retailer_id (single-retailer assumption). This is KNOWN TO BE INCOMPLETE
-# once multi-retailer support lands: a variant's real identity is (barcode, retailer_id). This
-# endpoint is expected to eventually become
-#     PUT /products/{barcode}/{retailer_id}/minimum_quantity
-# (same method, same {barcode}/{retailer_id} segment order as the product-detail/membership
-# routes, no trailing slash).
-@router.put("/products/{barcode}/minimum_quantity", response_model=None)
+@router.put("/products/{barcode}/{retailer_id}/minimum_quantity", response_model=None)
 def set_minimum_quantity(
     barcode: str,
+    retailer_id: int,
     body: SetMinimumQuantityRequest,
     db: sqlite3.Connection = Depends(get_db),
-    retailer_id: int = Depends(get_retailer_id),
 ) -> dict | JSONResponse:
     """
-    Set the minimum quantity threshold for a product.
+    Set the minimum quantity threshold for a product variant.
 
-    Upserts the restock alert level onto product_variants for (barcode, retailer_id):
-    updates the row if it exists, otherwise creates a null-data variant row carrying
-    only the minimum. A negative minimum_quantity is rejected at the schema layer (422,
-    SetMinimumQuantityRequest.minimum_quantity has ge=0). The minimum is settable for any
-    in-system barcode (one with a barcodes row); a barcode with no barcodes row violates
-    the FK and returns 404.
+    The variant is identified by the composite (barcode, retailer_id), both taken from the
+    path — the same {barcode}/{retailer_id} convention as the product-detail/membership routes.
+    Upserts the restock alert level onto product_variants: updates the row if it exists,
+    otherwise creates a null-data variant row carrying only the minimum. A negative
+    minimum_quantity is rejected at the schema layer (422, SetMinimumQuantityRequest.
+    minimum_quantity has ge=0). An unknown retailer_id -> 404 retailer_not_found (checked
+    before the upsert, so a FK failure isn't misattributed to barcode_not_found). The minimum
+    is settable for any in-system barcode (one with a barcodes row); a barcode with no barcodes
+    row violates the FK and returns 404 barcode_not_found.
     """
     # Defence in depth: schema validation (Field(ge=0)) already rejects negatives
     # with 422 before this handler runs, so this branch is not reachable via HTTP.
     if body.minimum_quantity < 0:
         return JSONResponse(status_code=400, content={"error": "invalid_minimum_quantity"})
     try:
+        guard = _retailer_missing_response(db, retailer_id)
+        if guard is not None:
+            return guard
         db.execute(
             "INSERT INTO product_variants (barcode, retailer_id, minimum_quantity) "
             "VALUES (?, ?, ?) "
@@ -193,7 +144,17 @@ def get_product_detail(
             "price_pence": row["price_pence"],
             "price_type": row["price_type"],
             "product_url": row["product_url"],
-            "groups": [{"id": r["id"], "name": r["name"]} for r in group_rows],
+            # OFF link built via the single urls.py builder (view vs add/edit chosen by name)
+            # so the branching lives in one place; the frontend consumes off_url directly.
+            "off_url": off_url(barcode, name=row["name"]),
+            "groups": [
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "group_page_url": group_page_url(r["id"]),
+                }
+                for r in group_rows
+            ],
         }
     except sqlite3.OperationalError:
         raise _503

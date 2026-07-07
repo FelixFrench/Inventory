@@ -397,15 +397,7 @@ function showNegativeModal() {
     document.getElementById('negative-modal').classList.add('visible');
 }
 
-// ── Toast ────────────────────────────────────────────────────────────────────
-
-function showToast(msg) {
-    const toast = document.getElementById('toast');
-    toast.textContent = msg;
-    toast.classList.add('visible');
-    const t = setTimeout(() => toast.classList.remove('visible'), 4000);
-    toast.onclick = () => { clearTimeout(t); toast.classList.remove('visible'); };
-}
+// showToast() lives in shared-utils.js (loaded before this script).
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 

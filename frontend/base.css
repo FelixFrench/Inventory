@@ -33,3 +33,4 @@ tfoot td { font-weight: 700; background: #f0f0f0; border-top: 2px solid #ddd; }
 .toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); padding: 0.6rem 1.2rem; border-radius: 4px; font-size: 0.95rem; white-space: nowrap; z-index: 1000; pointer-events: none; }
 .toast--ok    { background: #E4F3E4; color: #2A5E2A; border: 1px solid #2A5E2A; }
 .toast--error { background: #FAECE7; color: #993C1D; border: 1px solid #993C1D; }
+.toast--info  { background: #1a1a1a; color: #fff; border: 1px solid #1a1a1a; }

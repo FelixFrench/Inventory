@@ -108,6 +108,7 @@ class GroupSummary(BaseModel):
     total_quantity: int
     low_stock: bool
     shortfall: int
+    group_page_url: str
 
 
 class VariantMember(BaseModel):
@@ -116,11 +117,14 @@ class VariantMember(BaseModel):
     name: Optional[str]
     brand: Optional[str]
     product_quantity: Optional[str]
+    current_quantity: int
+    product_page_url: str
 
 
 class SubgroupMember(BaseModel):
     id: int
     name: str
+    group_page_url: str
 
 
 class GroupDetail(GroupSummary):
@@ -131,6 +135,7 @@ class GroupDetail(GroupSummary):
 class ProductGroupMembership(BaseModel):
     id: int
     name: str
+    group_page_url: str
 
 
 class ProductDetail(BaseModel):
@@ -143,6 +148,7 @@ class ProductDetail(BaseModel):
     price_pence: Optional[int]
     price_type: Optional[str]
     product_url: Optional[str]
+    off_url: str
     groups: list[ProductGroupMembership]
 
 

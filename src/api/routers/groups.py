@@ -22,6 +22,7 @@ from src.api.models import (
     CreateGroupRequest,
     UpdateGroupRequest,
 )
+from src.api.urls import group_page_url, product_page_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/groups", tags=["Groups"])
@@ -298,6 +299,7 @@ def list_groups(db: sqlite3.Connection = Depends(get_db)) -> dict | JSONResponse
                 "total_quantity": g.total_quantity,
                 "low_stock": g.low_stock,
                 "shortfall": g.shortfall,
+                "group_page_url": group_page_url(g.group_id),
             }
             for g in group_resolver.resolve_all_groups(db)
         ]
@@ -324,10 +326,13 @@ def get_group(
         if res is None:
             return JSONResponse(status_code=404, content={"error": "group_not_found"})
         variant_rows = db.execute(
-            "SELECT gvm.barcode, gvm.retailer_id, pv.name, pv.brand, pv.product_quantity "
+            "SELECT gvm.barcode, gvm.retailer_id, pv.name, pv.brand, pv.product_quantity, "
+            "       COALESCE(inv.quantity, 0) AS current_quantity "
             "FROM group_variant_members gvm "
             "LEFT JOIN product_variants pv "
             "       ON pv.barcode = gvm.barcode AND pv.retailer_id = gvm.retailer_id "
+            "LEFT JOIN inventory inv "
+            "       ON inv.barcode = gvm.barcode AND inv.retailer_id = gvm.retailer_id "
             "WHERE gvm.group_id = ? "
             "ORDER BY pv.name ASC NULLS LAST, gvm.barcode ASC",
             (group_id,),
@@ -352,10 +357,19 @@ def get_group(
                     "name": r["name"],
                     "brand": r["brand"],
                     "product_quantity": r["product_quantity"],
+                    "current_quantity": r["current_quantity"],
+                    "product_page_url": product_page_url(r["barcode"], r["retailer_id"]),
                 }
                 for r in variant_rows
             ],
-            "subgroups": [{"id": r["id"], "name": r["name"]} for r in subgroup_rows],
+            "subgroups": [
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "group_page_url": group_page_url(r["id"]),
+                }
+                for r in subgroup_rows
+            ],
         }
     except sqlite3.OperationalError:
         raise _503

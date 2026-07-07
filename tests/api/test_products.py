@@ -71,99 +71,7 @@ def client_no_auth(db):
 
 
 # ---------------------------------------------------------------------------
-# GET /products/minimum-quantities
-# ---------------------------------------------------------------------------
-
-def test_get_minimum_quantities_ordered(client, db):
-    """Products are returned ordered by name ASC NULLS LAST, then barcode ASC."""
-    db.executescript("""
-        INSERT INTO barcodes VALUES ('1111111111111');
-        INSERT INTO barcodes VALUES ('2222222222222');
-        INSERT INTO barcodes VALUES ('3333333333333');
-        INSERT INTO inventory (barcode, retailer_id, quantity) VALUES ('1111111111111', 1, 3);
-        INSERT INTO inventory (barcode, retailer_id, quantity) VALUES ('2222222222222', 1, 1);
-        INSERT INTO inventory (barcode, retailer_id, quantity) VALUES ('3333333333333', 1, 2);
-        INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity, minimum_quantity) VALUES ('1111111111111', 1, 'Baked Beans', 'Heinz', '415g', 2);
-        INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity, minimum_quantity) VALUES ('2222222222222', 1, 'Apple Juice', 'Tropicana', '1kg', 1);
-    """)
-    resp = client.get("/products/minimum-quantities")
-    assert resp.status_code == 200
-    products = resp.json()["products"]
-    assert len(products) == 3
-    assert products[0]["name"] == "Apple Juice"
-    assert products[1]["name"] == "Baked Beans"
-    # The unresolved barcode (no product_variants row) sorts last
-    assert products[2]["name"] is None
-    assert products[2]["barcode"] == "3333333333333"
-
-
-def test_get_minimum_quantities_no_variant_row(client, db):
-    """Products without a product_variants row have name/brand/quantity as null."""
-    db.executescript("""
-        INSERT INTO barcodes VALUES ('9999999999999');
-        INSERT INTO inventory (barcode, retailer_id, quantity) VALUES ('9999999999999', 1, 1);
-    """)
-    resp = client.get("/products/minimum-quantities")
-    assert resp.status_code == 200
-    p = resp.json()["products"][0]
-    assert p["name"] is None
-    assert p["brand"] is None
-    assert p["quantity"] is None
-    assert p["barcode"] == "9999999999999"
-
-
-def test_get_minimum_quantities_coalesce_null(client, db):
-    """minimum_quantity defaults to 0 when the DB value is null (schema DEFAULT covers this,
-    but the COALESCE ensures it regardless)."""
-    db.execute("INSERT INTO barcodes VALUES ('1234567890123')")
-    db.execute("INSERT INTO inventory (barcode, retailer_id, quantity) VALUES ('1234567890123', 1, 5)")
-    db.commit()
-    resp = client.get("/products/minimum-quantities")
-    assert resp.status_code == 200
-    p = resp.json()["products"][0]
-    assert p["minimum_quantity"] == 0
-    assert p["current_quantity"] == 5
-
-
-def test_get_minimum_quantities_quantity_grams(client, db):
-    """product_quantity string is returned verbatim."""
-    db.executescript("""
-        INSERT INTO barcodes VALUES ('1000000000001');
-        INSERT INTO inventory (barcode, retailer_id) VALUES ('1000000000001', 1);
-        INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity) VALUES ('1000000000001', 1, 'Soup', 'Heinz', '415g');
-    """)
-    resp = client.get("/products/minimum-quantities")
-    p = resp.json()["products"][0]
-    assert p["quantity"] == "415g"
-
-
-def test_get_minimum_quantities_quantity_kg(client, db):
-    """product_quantity string is returned verbatim for kg products."""
-    db.executescript("""
-        INSERT INTO barcodes VALUES ('1000000000002');
-        INSERT INTO inventory (barcode, retailer_id) VALUES ('1000000000002', 1);
-        INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity) VALUES ('1000000000002', 1, 'Milk', 'Arla', '1.5kg');
-    """)
-    resp = client.get("/products/minimum-quantities")
-    p = resp.json()["products"][0]
-    assert p["quantity"] == "1.5kg"
-
-
-def test_get_minimum_quantities_empty_inventory(client, db):
-    """Empty inventory returns an empty products list."""
-    resp = client.get("/products/minimum-quantities")
-    assert resp.status_code == 200
-    assert resp.json() == {"products": []}
-
-
-def test_get_minimum_quantities_requires_auth(client_no_auth):
-    """Returns 401 when no API key header is provided."""
-    resp = client_no_auth.get("/products/minimum-quantities")
-    assert resp.status_code == 401
-
-
-# ---------------------------------------------------------------------------
-# PUT /products/{barcode}/minimum_quantity
+# PUT /products/{barcode}/{retailer_id}/minimum_quantity
 # ---------------------------------------------------------------------------
 
 def test_put_minimum_quantity_updates_existing_variant(client, db):
@@ -174,7 +82,7 @@ def test_put_minimum_quantity_updates_existing_variant(client, db):
         INSERT INTO inventory (barcode, retailer_id, quantity) VALUES ('5014788110140', 1, 4);
     """)
     resp = client.put(
-        "/products/5014788110140/minimum_quantity",
+        "/products/5014788110140/1/minimum_quantity",
         json={"minimum_quantity": 3},
     )
     assert resp.status_code == 200
@@ -192,7 +100,7 @@ def test_put_minimum_quantity_creates_variant_for_in_system_barcode(client, db):
     db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
     db.commit()
     resp = client.put(
-        "/products/5014788110140/minimum_quantity",
+        "/products/5014788110140/1/minimum_quantity",
         json={"minimum_quantity": 4},
     )
     assert resp.status_code == 200
@@ -214,7 +122,7 @@ def test_put_minimum_quantity_zero_is_valid(client, db):
         INSERT INTO product_variants (barcode, retailer_id, name, minimum_quantity) VALUES ('5014788110140', 1, 'Beans', 5);
     """)
     resp = client.put(
-        "/products/5014788110140/minimum_quantity",
+        "/products/5014788110140/1/minimum_quantity",
         json={"minimum_quantity": 0},
     )
     assert resp.status_code == 200
@@ -232,7 +140,7 @@ def test_put_minimum_quantity_negative_returns_422(client, db):
         INSERT INTO product_variants (barcode, retailer_id) VALUES ('5014788110140', 1);
     """)
     resp = client.put(
-        "/products/5014788110140/minimum_quantity",
+        "/products/5014788110140/1/minimum_quantity",
         json={"minimum_quantity": -1},
     )
     assert resp.status_code == 422
@@ -245,7 +153,7 @@ def test_put_minimum_quantity_float_returns_422(client, db):
         INSERT INTO product_variants (barcode, retailer_id) VALUES ('5014788110140', 1);
     """)
     resp = client.put(
-        "/products/5014788110140/minimum_quantity",
+        "/products/5014788110140/1/minimum_quantity",
         json={"minimum_quantity": 1.5},
     )
     assert resp.status_code == 422  # Pydantic validation error
@@ -254,11 +162,26 @@ def test_put_minimum_quantity_float_returns_422(client, db):
 def test_put_minimum_quantity_unknown_barcode_returns_404(client, db):
     """A barcode with no barcodes row violates the product_variants FK → 404 (not 500)."""
     resp = client.put(
-        "/products/0000000000000/minimum_quantity",
+        "/products/0000000000000/1/minimum_quantity",
         json={"minimum_quantity": 2},
     )
     assert resp.status_code == 404
     assert resp.json() == {"error": "barcode_not_found"}
+
+
+def test_put_minimum_quantity_unknown_retailer_404(client, db):
+    """An unknown retailer_id is surfaced as retailer_not_found, checked before the upsert so
+    no variant row is created for the bad retailer."""
+    db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
+    db.commit()
+    resp = client.put(
+        "/products/5014788110140/999/minimum_quantity",
+        json={"minimum_quantity": 2},
+    )
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "retailer_not_found"}
+    # The guard runs before the upsert: nothing was written for the bad retailer.
+    assert db.execute("SELECT 1 FROM product_variants WHERE retailer_id=999").fetchone() is None
 
 
 def test_put_minimum_quantity_requires_auth(client_no_auth, db):
@@ -268,7 +191,7 @@ def test_put_minimum_quantity_requires_auth(client_no_auth, db):
         INSERT INTO product_variants (barcode, retailer_id) VALUES ('5014788110140', 1);
     """)
     resp = client_no_auth.put(
-        "/products/5014788110140/minimum_quantity",
+        "/products/5014788110140/1/minimum_quantity",
         json={"minimum_quantity": 1},
     )
     assert resp.status_code == 401
@@ -302,7 +225,11 @@ def test_product_detail_full(client, db):
     assert d["price_pence"] == 120
     assert d["price_type"] == "unit"
     assert d["product_url"] == "https://example.test/x"
-    assert d["groups"] == [{"id": 7, "name": "Beans"}]
+    # OFF link is built server-side via urls.py's off_url() (view URL since a name is present).
+    assert d["off_url"] == "https://world.openfoodfacts.org/product/5014788110140"
+    assert d["groups"] == [
+        {"id": 7, "name": "Beans", "group_page_url": "/group.html?id=7"}
+    ]
 
 
 def test_product_detail_nulls_render(client, db):
@@ -319,6 +246,10 @@ def test_product_detail_nulls_render(client, db):
     assert d["current_quantity"] == 0
     assert d["price_pence"] is None
     assert d["price_type"] is None
+    # No name yet -> off_url falls back to the add/edit URL.
+    assert d["off_url"] == (
+        "https://world.openfoodfacts.org/cgi/product.pl?type=edit&code=5014788110140"
+    )
     assert d["groups"] == []
 
 
