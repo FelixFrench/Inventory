@@ -71,9 +71,10 @@ function makeRowHTML(barcode) {
     const deltaSign  = sessionType === 'out' ? '−' : '+';
 
     const decDisabled = r.session_delta === 0 ? ' disabled' : '';
-    const offHref = sanitiseHref(r.off_url);
-    const nameLink = offHref
-        ? `<a href="${esc(offHref)}" target="_blank" rel="noopener noreferrer" class="feed-item-name">${renderField(r.name)}</a>`
+    // Product name links to the internal product-info page (server-supplied).
+    const pageHref = sanitiseHref(r.product_page_url);
+    const nameLink = pageHref
+        ? `<a href="${esc(pageHref)}" class="feed-item-name">${renderField(r.name)}</a>`
         : `<span class="feed-item-name">${renderField(r.name)}</span>`;
     const priceHref = sanitiseHref(r.price_url);
     const priceHtml = priceHref
@@ -215,12 +216,16 @@ function _storeRow(barcode, msg) {
         name: msg.name, brand: msg.brand,
         quantity: msg.quantity, price: msg.price,
         off_url: msg.off_url,
+        product_page_url: msg.product_page_url,
         price_url: msg.price_url,
     };
 }
 
 function handleWSMessage(msg) {
     if (msg.type === 'scan') {
+        // Sessionless scans (in_session === false) are broadcast to the search page,
+        // not the feed — ignore them here so no phantom row is injected.
+        if (msg.in_session === false) return;
         _storeRow(msg.barcode, msg);
         rows[msg.barcode].inventory_quantity = msg.inventory_quantity ?? 0;
         if (document.getElementById('row-' + msg.barcode)) {
@@ -319,6 +324,7 @@ function renderActiveSession(session) {
             name: item.name, brand: item.brand,
             quantity: item.quantity, price: item.price,
             off_url: item.off_url,
+            product_page_url: item.product_page_url,
             price_url: item.price_url,
         };
         addRowToFeed(item.barcode);

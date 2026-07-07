@@ -21,6 +21,12 @@ tr:last-child td { border-bottom: none; }
 tr:hover td { background: #f9f9f9; }
 .brand { color: #666; font-size: 0.85rem; margin-top: 2px; }
 .muted { color: #aaa; }
+
+/* Full-cell links: the anchor fills the cell so the whole cell is clickable.
+   Padding moves off the <td> onto the <a> (matching the default td padding). */
+td.cell-link { padding: 0; }
+td.cell-link > a { display: block; padding: 13px 14px; height: 100%; }
+td.cell-link > a:hover { text-decoration: none; }
 tfoot td { font-weight: 700; background: #f0f0f0; border-top: 2px solid #ddd; }
 .hidden { display: none !important; }
 

@@ -1,5 +1,7 @@
 from src.api.groups import is_low_stock, resolve_all_groups, shortfall
+from src.api.urls import group_page_url
 from src.api.urls import off_url as build_off_url
+from src.api.urls import product_page_url
 
 
 def _label_for_info_field(info_status, has_pv_row, field_value) -> str:
@@ -14,7 +16,7 @@ def _label_for_info_field(info_status, has_pv_row, field_value) -> str:
     return 'resolved'
 
 
-def _label_for_price(price_status, has_pr_row, price_pence) -> str:
+def _label_for_price(price_status, has_pr_row, price_pence, price_type) -> str:
     if price_status == 'pending':
         return 'pending'
     if price_status == 'not_possible':
@@ -23,8 +25,12 @@ def _label_for_price(price_status, has_pr_row, price_pence) -> str:
         return 'failed'
     if not has_pr_row:
         return 'missing'
-    if price_pence is None:
+    if price_type == 'per_kg':
+        # Per-kg items store a non-null £/kg price and are tagged price_type='per_kg'.
         return 'per_kg'
+    if price_pence is None:
+        # A null price with a prices row means no successful price lookup, full stop.
+        return 'missing'
     return 'resolved'
 
 
@@ -82,7 +88,9 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
         name_label     = _label_for_info_field(row['info_status'], has_pv, row['name'])
         brand_label    = _label_for_info_field(row['info_status'], has_pv, row['brand'])
         quantity_label = _label_for_info_field(row['info_status'], has_pv, row['product_quantity'])
-        price_label    = _label_for_price(row['price_status'], has_pr, row['price_pence'])
+        price_label    = _label_for_price(
+            row['price_status'], has_pr, row['price_pence'], row['price_type']
+        )
 
         if all(label == 'resolved' for label in [name_label, brand_label, quantity_label, price_label]):
             continue
@@ -97,6 +105,7 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
             "quantity": {"value": row['product_quantity'], "label": quantity_label},
             "price":    {"value": price_value,             "label": price_label},
             "off_url":   build_off_url(row['barcode'], name=row['name']),
+            "product_page_url": product_page_url(row['barcode'], retailer_id),
             "price_url": row['product_url'],
         })
 
@@ -130,6 +139,7 @@ def get_inventory_report(db, retailer_id: int) -> dict:
             "price_pence": r["price_pence"],
             "line_total_pence": line,
             "off_url":   build_off_url(r["barcode"], name=r["name"]),
+            "product_page_url": product_page_url(r["barcode"], retailer_id),
             "price_url": r["product_url"],
         })
     return {"items": items, "total_value_pence": total}
@@ -154,6 +164,7 @@ def get_low_stock_report(db, retailer_id: int) -> dict:
             "have": g.total_quantity,
             "need": g.minimum_quantity,
             "short": g.shortfall,
+            "group_page_url": group_page_url(g.group_id),
         }
         for g in low_groups
     ]
@@ -185,6 +196,7 @@ def get_low_stock_report(db, retailer_id: int) -> dict:
             "have": r["have"],
             "need": r["need"],
             "short": shortfall(r["have"], r["need"]),
+            "product_page_url": product_page_url(r["barcode"], retailer_id),
         }
         for r in low_rows
     ]

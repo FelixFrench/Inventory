@@ -445,10 +445,13 @@ def test_unresolved_missing_price(client, db):
 
 
 def test_unresolved_per_kg(client, db):
+    """A per-kg row stores a NON-NULL £/kg price and is tagged price_type='per_kg'; it is
+    labelled 'per_kg' (not treated as 'no price') via the price_type signal, and its £/kg
+    value is carried through. Surfaces here because product_quantity is unresolved."""
     bc = _BC(4)
     _seed_barcode(db, bc)
     _seed_pv(db, bc, name="Loose Apples", brand="Farms", product_quantity=None)
-    _seed_price(db, bc, price_pence=None, price_type='per_kg')
+    _seed_price(db, bc, price_pence=250, price_type='per_kg')
 
     resp = client.get("/reports/unresolved")
     assert resp.status_code == 200
@@ -456,6 +459,31 @@ def test_unresolved_per_kg(client, db):
     price_items = [i for i in items if i["barcode"] == bc]
     assert len(price_items) == 1
     assert price_items[0]["price"]["label"] == "per_kg"
+    assert price_items[0]["price"]["value"] == 2.5  # the £/kg unit price, not "no price"
+
+
+def test_unresolved_null_price_is_missing_not_per_kg(client, db):
+    """A null price with a prices row means 'no successful lookup' (price_type='unit'),
+    so it labels 'missing' — the old null-price==per_kg inference is gone."""
+    bc = _BC(40)
+    _seed_barcode(db, bc)
+    _seed_pv(db, bc, name="Beans", brand="Heinz", product_quantity="415g")
+    _seed_price(db, bc, price_pence=None, price_type='unit')
+
+    resp = client.get("/reports/unresolved")
+    assert resp.status_code == 200
+    item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
+    assert item["price"]["label"] == "missing"
+
+
+def test_label_for_price_keys_off_price_type():
+    """Unit-test the detection helper directly: per_kg is signalled by price_type, and a
+    non-null unit price is 'resolved'."""
+    from src.api.reports import _label_for_price
+    assert _label_for_price('resolved', True, 250, 'per_kg') == 'per_kg'
+    assert _label_for_price('resolved', True, 150, 'unit') == 'resolved'
+    assert _label_for_price('resolved', True, None, 'unit') == 'missing'
+    assert _label_for_price('resolved', False, None, 'unit') == 'missing'
 
 
 def test_unresolved_fully_resolved_excluded(client, db):
@@ -629,6 +657,47 @@ def test_inventory_price_url_present_when_set(client, db):
     resp = client.get("/reports/inventory")
     item = resp.json()["items"][0]
     assert item["price_url"] == url
+
+
+# ---------------------------------------------------------------------------
+# product_page_url / group_page_url in reports (internal page links)
+# ---------------------------------------------------------------------------
+
+def test_inventory_includes_product_page_url(client, db):
+    bc = "7000000000005"
+    _seed_item(db, bc, "Butter", quantity=1, price_pence=150)
+
+    resp = client.get("/reports/inventory")
+    item = resp.json()["items"][0]
+    assert item["product_page_url"] == f"/product.html?barcode={bc}&retailer_id=1"
+
+
+def test_unresolved_includes_product_page_url(client, db):
+    bc = _BC(30)
+    _seed_barcode(db, bc)
+
+    resp = client.get("/reports/unresolved")
+    item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
+    assert item["product_page_url"] == f"/product.html?barcode={bc}&retailer_id=1"
+
+
+def test_low_stock_products_include_product_page_url(client, db):
+    bc = "7000000000006"
+    _seed_item(db, bc, "Red Lentils", quantity=1, minimum_quantity=3)
+
+    resp = client.get("/reports/low-stock")
+    item = resp.json()["products"][0]
+    assert item["product_page_url"] == f"/product.html?barcode={bc}&retailer_id=1"
+
+
+def test_low_stock_groups_include_group_page_url(client, db):
+    _seed_item(db, "7000000000007", "Bean Can", quantity=2, minimum_quantity=0)
+    _seed_group(db, 3, "Beans", minimum=5)
+    _add_group_variant(db, 3, "7000000000007")
+
+    resp = client.get("/reports/low-stock")
+    g = resp.json()["groups"][0]
+    assert g["group_page_url"] == "/group.html?id=3"
 
 
 # ---------------------------------------------------------------------------

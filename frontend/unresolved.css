@@ -7,6 +7,8 @@ main { max-width: 1100px; }
 table { border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 thead th { background: #2a2a2a; padding: 10px 14px; text-transform: none; letter-spacing: 0; white-space: nowrap; }
 tbody td { padding: 10px 14px; font-size: 0.9rem; vertical-align: middle; border-bottom: none; }
+/* Full-cell link anchor must match this table's 10px 14px cell padding (not base.css's 13px 14px). */
+td.cell-link > a { padding: 10px 14px; }
 tbody tr:nth-child(even) { background: #f9f9f9; }
 tr:hover td { background: inherit; }
 

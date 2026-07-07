@@ -2,8 +2,10 @@
 
 function makeBadge(label) {
   const span = document.createElement('span');
-  span.className = `badge badge--${label}`;
-  span.textContent = label.replace(/-/g, ' ');
+  // Backend labels use underscores (per_kg, not_attempted, no_data); the CSS badge
+  // classes use hyphens (.badge--per-kg). Normalise so the styled badge actually applies.
+  span.className = `badge badge--${label.replace(/_/g, '-')}`;
+  span.textContent = label.replace(/[-_]/g, ' ');
   return span;
 }
 
@@ -43,15 +45,33 @@ function renderTable(items) {
   for (const item of items) {
     const tr = document.createElement('tr');
 
-    // Barcode — link to OFF page
+    // The row's OFF link (external) — used on the name/brand/quantity cells.
+    // Its view-vs-add-edit branching is baked into item.off_url server-side.
+    const offHref = sanitiseHref(item.off_url);
+
+    // Wrap a cell's content in the row's external OFF link, filling the cell.
+    function offCell(td, content) {
+      if (offHref) {
+        td.classList.add('cell-link');
+        const a = document.createElement('a');
+        a.href = offHref;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.appendChild(content);
+        td.appendChild(a);
+      } else {
+        td.appendChild(content);
+      }
+    }
+
+    // Barcode — link to the internal product-info page (server-supplied)
     const tdBarcode = document.createElement('td');
     tdBarcode.className = 'barcode-fallback';
-    const offHref = sanitiseHref(item.off_url);
-    if (offHref) {
+    const pageHref = sanitiseHref(item.product_page_url);
+    if (pageHref) {
+      tdBarcode.classList.add('cell-link');
       const barcodeLink = document.createElement('a');
-      barcodeLink.href = offHref;
-      barcodeLink.target = '_blank';
-      barcodeLink.rel = 'noopener noreferrer';
+      barcodeLink.href = pageHref;
       barcodeLink.textContent = item.barcode;
       tdBarcode.appendChild(barcodeLink);
     } else {
@@ -59,21 +79,21 @@ function renderTable(items) {
     }
     tr.appendChild(tdBarcode);
 
-    // Name — value or badge, same as Brand/Quantity
+    // Name — value or badge, linked to OFF
     const tdName = document.createElement('td');
-    tdName.appendChild(renderField(item.name));
+    offCell(tdName, renderField(item.name));
     tr.appendChild(tdName);
 
-    // Brand
+    // Brand — linked to OFF
     const tdBrand = document.createElement('td');
     tdBrand.className = 'col-brand';
-    tdBrand.appendChild(renderField(item.brand));
+    offCell(tdBrand, renderField(item.brand));
     tr.appendChild(tdBrand);
 
-    // Quantity
+    // Quantity — linked to OFF
     const tdQuantity = document.createElement('td');
     tdQuantity.className = 'col-quantity';
-    tdQuantity.appendChild(renderField(item.quantity));
+    offCell(tdQuantity, renderField(item.quantity));
     tr.appendChild(tdQuantity);
 
     // Price
@@ -81,6 +101,7 @@ function renderTable(items) {
     const priceEl = renderPrice(item.price);
     const priceHref = sanitiseHref(item.price_url);
     if (priceHref) {
+      tdPrice.classList.add('cell-link');
       const priceLink = document.createElement('a');
       priceLink.href = priceHref;
       priceLink.target = '_blank';

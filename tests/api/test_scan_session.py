@@ -160,10 +160,23 @@ def test_scan_known_barcode_no_price(client, db):
     assert row["price_status"] == "pending"
 
 
-def test_scan_no_active_session(client):
+def test_scan_no_active_session_returns_200(client, db):
+    """With no active session, /scan returns 200 (never 409), writes nothing to
+    inventory or session_items, but does make the barcode known via INSERT OR IGNORE."""
     resp = client.post("/scan", json={"barcode": _BARCODE})
-    assert resp.status_code == 409
-    assert resp.json()["detail"]["error"] == "no_active_session"
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["barcode"] == _BARCODE
+    assert data["in_session"] is False
+    assert data["session_delta"] is None
+
+    # Nothing written to session_items or inventory.
+    assert db.execute("SELECT COUNT(*) FROM session_items").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM inventory").fetchone()[0] == 0
+    # The barcode is now known to the system.
+    assert db.execute(
+        "SELECT 1 FROM barcodes WHERE barcode = ?", (_BARCODE,)
+    ).fetchone() is not None
 
 
 # ---------------------------------------------------------------------------

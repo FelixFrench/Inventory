@@ -609,6 +609,17 @@ def test_get_session_item_off_url_view_when_resolved(client, db):
     assert item["off_url"] == _OFF_VIEW.format(_BARCODE)
 
 
+def test_get_session_item_includes_product_page_url(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved",
+               name="Baked Beans", brand="Heinz", product_quantity="415g", price_pence=123)
+
+    resp = client.get("/session")
+    item = resp.json()["session"]["items"][0]
+    assert item["product_page_url"] == f"/product.html?barcode={_BARCODE}&retailer_id=1"
+
+
 def test_get_session_item_off_url_add_when_failed(client, db):
     session_id = _start_session(client, "in")
     _seed_item(db, _BARCODE, session_id, delta=1,

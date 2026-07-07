@@ -177,11 +177,35 @@ def test_scan_broadcasts_scan_payload(client, db):
     assert msg["session_delta"] == 1
 
 
-def test_scan_no_broadcast_on_failure(client, db):
-    with patch.object(manager, "broadcast", new_callable=AsyncMock) as mock_broadcast:
+def test_sessionless_scan_broadcasts_lean_payload(client, db):
+    """With no active session, /scan returns 200 and broadcasts a dedicated lean payload
+    (built by build_scan_notification, not build_payload)."""
+    with client.websocket_connect("/ws") as ws:
         resp = client.post("/scan", json={"barcode": _BARCODE})
-        assert resp.status_code == 409
-        mock_broadcast.assert_not_called()
+        assert resp.status_code == 200
+        msg = ws.receive_json()
+
+    assert msg == {
+        "type": "scan",
+        "barcode": _BARCODE,
+        "retailer": 1,
+        "in_session": False,
+    }
+
+
+def test_in_session_scan_broadcast_has_in_session_flag(client, db):
+    """An in-session scan's broadcast payload carries in_session: true."""
+    _create_session(db)
+    db.execute("INSERT INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
+    db.commit()
+
+    with client.websocket_connect("/ws") as ws:
+        resp = client.post("/scan", json={"barcode": _BARCODE})
+        assert resp.status_code == 200
+        msg = ws.receive_json()
+
+    assert msg["type"] == "scan"
+    assert msg["in_session"] is True
 
 
 # ── Poll loop logic (_compute_poll_updates) ──────────────────────────────────
@@ -322,6 +346,12 @@ def test_build_payload_off_url_add_when_failed():
     row = _make_row(_BARCODE, "failed", "not_possible")
     payload = build_payload("resolution", row, _RETAILER_ID)
     assert payload["off_url"] == _OFF_ADD.format(_BARCODE)
+
+
+def test_build_payload_includes_product_page_url():
+    row = _make_row(_BARCODE, "resolved", "resolved")
+    payload = build_payload("scan", row, _RETAILER_ID)
+    assert payload["product_page_url"] == f"/product.html?barcode={_BARCODE}&retailer_id=1"
 
 
 def test_build_payload_price_url_none_when_absent():
