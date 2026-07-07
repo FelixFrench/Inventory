@@ -1,7 +1,7 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #1a1a1a; min-height: 100vh; display: flex; flex-direction: column; }
 header { background: #1a1a1a; color: #fff; padding: 16px 20px; font-size: 1.1rem; font-weight: 600; }
-nav { background: #2a2a2a; display: flex; gap: 0; }
+nav { background: #2a2a2a; display: flex; flex-wrap: wrap; gap: 0; }
 nav a { color: #ccc; text-decoration: none; padding: 12px 20px; font-size: 0.95rem; }
 nav a:hover { background: #3a3a3a; color: #fff; }
 nav a.active { color: #fff; border-bottom: 3px solid #4a9eff; }
