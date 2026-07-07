@@ -9,7 +9,8 @@ class ScanRequest(BaseModel):
 
 class ScanResponse(BaseModel):
     barcode: str
-    session_delta: int
+    in_session: bool
+    session_delta: Optional[int] = None
 
 
 class StartSessionRequest(BaseModel):
@@ -31,6 +32,7 @@ class SessionItem(BaseModel):
     quantity: FieldStatus
     price: FieldStatus
     off_url: str
+    product_page_url: str
     price_url: Optional[str]
 
 

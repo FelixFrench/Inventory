@@ -24,6 +24,10 @@
 .member-list li.empty { justify-content: center; color: #666; }
 .member-main { display: flex; flex-direction: column; gap: 2px; }
 .member-meta { color: #666; font-size: 0.82rem; }
+/* List markup (not a table): let the member-name region fill the row up to the Remove
+   button so the whole left area is a clickable target rather than just the text. */
+.member-list .member-main { flex: 1; }
+.member-list .member-main > a { display: block; }
 
 .remove-btn { font-size: 0.82rem; padding: 4px 10px; background: #fff; color: #993C1D; border: 1px solid #e2b8ad; border-radius: 6px; cursor: pointer; white-space: nowrap; }
 .remove-btn:hover { background: #faece7; }

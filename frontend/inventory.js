@@ -11,23 +11,22 @@ function render(data) {
   } else {
     const rows = data.items.map(item => {
       const nameText = item.name || item.barcode;
-      const offHref = sanitiseHref(item.off_url);
-      const nameHtml = offHref
-        ? `<a href="${esc(offHref)}" target="_blank" rel="noopener noreferrer">${esc(nameText)}</a>`
-        : esc(nameText);
+      const brandHtml = item.brand ? '<div class="brand">' + esc(item.brand) + '</div>' : '';
+      // Product name cell links to the internal product-info page (server-supplied).
+      const pageHref = sanitiseHref(item.product_page_url);
+      const nameCell = pageHref
+        ? `<td class="cell-link"><a href="${esc(pageHref)}"><div>${esc(nameText)}</div>${brandHtml}</a></td>`
+        : `<td><div>${esc(nameText)}</div>${brandHtml}</td>`;
       const priceText = pence(item.price_pence);
       const priceHref = sanitiseHref(item.price_url);
-      const priceHtml = priceHref
-        ? `<a href="${esc(priceHref)}" target="_blank" rel="noopener noreferrer">${priceText}</a>`
-        : priceText;
+      const priceCell = priceHref
+        ? `<td class="cell-link"><a href="${esc(priceHref)}" target="_blank" rel="noopener noreferrer">${priceText}</a></td>`
+        : `<td>${priceText}</td>`;
       return `
           <tr>
-            <td>
-              <div>${nameHtml}</div>
-              ${item.brand ? '<div class="brand">' + esc(item.brand) + '</div>' : ''}
-            </td>
+            ${nameCell}
             <td>${item.quantity}</td>
-            <td>${priceHtml}</td>
+            ${priceCell}
             <td>${pence(item.line_total_pence)}</td>
           </tr>`;
     }).join('');

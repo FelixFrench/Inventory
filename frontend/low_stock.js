@@ -4,13 +4,20 @@ function groupsTable(groups) {
   if (groups.length === 0) {
     return '<p class="empty">No groups below minimum.</p>';
   }
-  const rows = groups.map(g => `
+  const rows = groups.map(g => {
+    const nameText = esc(g.name) || '—';
+    const href = sanitiseHref(g.group_page_url);
+    const nameCell = href
+      ? `<td class="cell-link"><a href="${esc(href)}"><div>${nameText}</div></a></td>`
+      : `<td><div>${nameText}</div></td>`;
+    return `
           <tr>
-            <td><div>${esc(g.name) || '—'}</div></td>
+            ${nameCell}
             <td>${g.have}</td>
             <td>${g.need}</td>
             <td class="shortfall-col"><span class="shortfall-badge">${g.short}</span></td>
-          </tr>`).join('');
+          </tr>`;
+  }).join('');
   return `
           <table>
             <thead>
@@ -29,16 +36,21 @@ function productsTable(products) {
   if (products.length === 0) {
     return '<p class="empty">No products below minimum.</p>';
   }
-  const rows = products.map(item => `
+  const rows = products.map(item => {
+    const nameText = esc(item.name) || '—';
+    const brandHtml = item.brand ? '<div class="brand">' + esc(item.brand) + '</div>' : '';
+    const href = sanitiseHref(item.product_page_url);
+    const nameCell = href
+      ? `<td class="cell-link"><a href="${esc(href)}"><div>${nameText}</div>${brandHtml}</a></td>`
+      : `<td><div>${nameText}</div>${brandHtml}</td>`;
+    return `
           <tr>
-            <td>
-              <div>${esc(item.name) || '—'}</div>
-              ${item.brand ? '<div class="brand">' + esc(item.brand) + '</div>' : ''}
-            </td>
+            ${nameCell}
             <td>${item.have}</td>
             <td>${item.need}</td>
             <td class="shortfall-col"><span class="shortfall-badge">${item.short}</span></td>
-          </tr>`).join('');
+          </tr>`;
+  }).join('');
   return `
           <table>
             <thead>

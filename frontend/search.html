@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Unresolved — Inventory</title>
+  <title>Inventory — Search</title>
   <link rel="stylesheet" href="base.css">
   <link rel="stylesheet" href="docs-nav.css">
-  <link rel="stylesheet" href="unresolved.css">
+  <link rel="stylesheet" href="search.css">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icons/icon-192.png" type="image/png">
 </head>
@@ -16,13 +16,19 @@
     <a href="/inventory.html">Inventory</a>
     <a href="/low_stock.html">Low Stock</a>
     <a href="/feed.html">Feed</a>
-    <a href="/unresolved.html" class="active">Unresolved</a>
+    <a href="/unresolved.html">Unresolved</a>
     <a href="/groups.html">Groups</a>
-    <a href="/search.html">Search</a>
+    <a href="/search.html" class="active">Search</a>
   </nav>
   <main>
-    <h1>Unresolved Products</h1>
-    <div id="report-container"></div>
+    <h1>Search</h1>
+    <p class="search-hint">Scan a barcode, or type one below, to open its product page.</p>
+    <form id="search-form" class="search-form" autocomplete="off">
+      <input id="search-input" class="search-input" type="text" inputmode="numeric"
+             placeholder="Barcode" aria-label="Barcode" required>
+      <button id="search-btn" class="search-btn" type="submit">Go</button>
+    </form>
+    <p id="search-status" class="search-status" aria-live="polite"></p>
   </main>
   <footer class="docs-footer">
     <a href="#" id="docs-link">API Docs</a>
@@ -31,6 +37,6 @@
   <script src="/config.js"></script>
   <script src="/docs-nav.js"></script>
   <script src="/shared-utils.js"></script>
-  <script src="/unresolved.js"></script>
+  <script src="/search.js"></script>
 </body>
 </html>

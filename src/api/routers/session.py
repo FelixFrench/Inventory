@@ -17,6 +17,7 @@ from src.api.models import (
 )
 from src.api.routers.ws import manager
 from src.api.urls import off_url as build_off_url
+from src.api.urls import product_page_url
 from src.db.db import get_connection
 
 router = APIRouter(tags=["Session"])
@@ -77,6 +78,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
             "quantity": {"value": quantity_val, "status": info_s},
             "price": {"value": price_val, "status": price_s},
             "off_url":   build_off_url(r['barcode'], info_status=r['info_status']),
+            "product_page_url": product_page_url(r['barcode'], retailer_id),
             "price_url": r['product_url'],
         })
 

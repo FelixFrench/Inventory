@@ -253,6 +253,26 @@ def test_product_detail_nulls_render(client, db):
     assert d["groups"] == []
 
 
+def test_product_detail_bare_barcode_no_variant_returns_200(client, db):
+    """The unresolved report links to this page for a barcode present in `barcodes` but with
+    zero product_variants row (a genuinely un-looked-up barcode). It must return 200 with
+    null-data fields, never 404, so that link is not dead."""
+    db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
+    db.commit()
+    # Precondition: no product_variants row exists for this barcode.
+    assert db.execute(
+        "SELECT 1 FROM product_variants WHERE barcode = '5014788110140'"
+    ).fetchone() is None
+
+    resp = client.get("/products/5014788110140/1")
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["barcode"] == "5014788110140"
+    assert d["name"] is None and d["brand"] is None and d["product_quantity"] is None
+    assert d["price_pence"] is None
+    assert d["groups"] == []
+
+
 def test_product_detail_not_found(client):
     resp = client.get("/products/0000000000000/1")
     assert resp.status_code == 404

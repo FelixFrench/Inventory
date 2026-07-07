@@ -18,6 +18,9 @@
 .membership-list { list-style: none; margin-bottom: 16px; }
 .membership-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #fff; border: 1px solid #eee; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
 .membership-list li.empty { justify-content: center; }
+/* List markup (not a table): let the member link fill the row's clickable area up to
+   the Remove button, so the whole left region is clickable rather than just the text. */
+.membership-list li > a { flex: 1; align-self: stretch; display: flex; align-items: center; }
 
 .remove-btn { font-size: 0.82rem; padding: 4px 10px; background: #fff; color: #993C1D; border: 1px solid #e2b8ad; border-radius: 6px; cursor: pointer; }
 .remove-btn:hover { background: #faece7; }

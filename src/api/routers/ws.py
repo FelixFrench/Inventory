@@ -1,6 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.api.urls import off_url as build_off_url
+from src.api.urls import product_page_url
 
 router = APIRouter(tags=["WebSocket"])
 
@@ -116,5 +117,22 @@ def build_payload(type_: str, row, retailer_id: int) -> dict:
         "price":    {"value": price_val,    "status": price_wire},
         "session_delta": row["session_delta"],
         "off_url":   build_off_url(row["barcode"], info_status=row["info_status"]),
+        "product_page_url": product_page_url(row["barcode"], retailer_id),
         "price_url": row["product_url"],
+    }
+
+
+def build_scan_notification(barcode: str, retailer_id: int) -> dict:
+    """Lean 'scan' payload for a sessionless scan.
+
+    Unlike ``build_payload`` this needs no resolved product row: a sessionless scan
+    has none of ``name``/``brand``/``product_quantity``/``price_pence``/``product_url``/
+    ``session_delta``/``info_status``/``price_status`` (build_payload would KeyError).
+    ``retailer`` carries the retailer_id, mirroring build_payload's wire field name.
+    """
+    return {
+        "type": "scan",
+        "barcode": barcode,
+        "retailer": retailer_id,
+        "in_session": False,
     }
