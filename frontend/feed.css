@@ -66,6 +66,4 @@ main { padding: 0; position: relative; }
 .negative-item { font-size: 0.85rem; padding: 4px 0; border-bottom: 1px solid #eee; }
 #btn-close-negative { margin-top: 12px; width: 100%; background: #1a1a1a; color: #fff; border: none; border-radius: 8px; padding: 10px; font-size: 0.9rem; cursor: pointer; }
 
-/* Recovery toast */
-#toast { display: none; position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: #1a1a1a; color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 0.875rem; z-index: 40; white-space: nowrap; cursor: pointer; }
-#toast.visible { display: block; }
+/* Toasts are shared: .toast / .toast--{ok,error,info} in base.css, created by showToast(). */

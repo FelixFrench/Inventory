@@ -552,7 +552,11 @@ def test_membership_both_directions(client, db):
     gid = client.post("/groups", json={"name": "Beans"}).json()["id"]
     client.post(f"/groups/{gid}/variants", json={"barcode": "b1"})
     detail = client.get("/products/b1/1").json()
-    assert {"id": gid, "name": "Beans"} in detail["groups"]
+    assert {
+        "id": gid,
+        "name": "Beans",
+        "group_page_url": f"/group.html?id={gid}",
+    } in detail["groups"]
 
 
 # --- Read endpoints --------------------------------------------------------------------
@@ -571,6 +575,7 @@ def test_list_groups(client, db):
     assert g["minimum_quantity"] == 5
     assert g["low_stock"] is True
     assert g["shortfall"] == 3
+    assert g["group_page_url"] == f"/group.html?id={gid}"
 
 
 def test_group_detail(client, db):
@@ -588,7 +593,12 @@ def test_group_detail(client, db):
     assert d["minimum_quantity"] == 10
     assert d["low_stock"] is True
     assert [v["barcode"] for v in d["variants"]] == ["b1"]
-    assert d["subgroups"] == [{"id": child, "name": "Child"}]
+    variant = d["variants"][0]
+    assert variant["current_quantity"] == 4
+    assert variant["product_page_url"] == "/product.html?barcode=b1&retailer_id=1"
+    assert d["subgroups"] == [
+        {"id": child, "name": "Child", "group_page_url": f"/group.html?id={child}"}
+    ]
 
 
 def test_group_detail_unknown_404(client):

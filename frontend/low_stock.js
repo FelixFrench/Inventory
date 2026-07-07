@@ -81,23 +81,7 @@ function render(data) {
   }
 })();
 
-let _activeToast = null;
-
-function showToast(message, type) {
-    if (_activeToast) {
-        _activeToast.remove();
-        _activeToast = null;
-    }
-    const toast = document.createElement('div');
-    toast.className = `toast toast--${type}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    _activeToast = toast;
-    setTimeout(() => {
-        toast.remove();
-        if (_activeToast === toast) _activeToast = null;
-    }, 4000);
-}
+// showToast() lives in shared-utils.js (loaded before this script).
 
 document.getElementById('print-btn').addEventListener('click', async () => {
     const btn = document.getElementById('print-btn');
