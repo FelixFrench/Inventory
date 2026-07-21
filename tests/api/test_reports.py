@@ -13,8 +13,8 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL, started_at TEXT NOT NULL, recovered_at TEXT);
 CREATE TABLE session_items (session_id INTEGER NOT NULL, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, delta INTEGER NOT NULL, info_status TEXT NOT NULL DEFAULT 'pending', price_status TEXT NOT NULL DEFAULT 'pending', first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
@@ -174,6 +174,34 @@ def test_inventory_off_failed_item_appears(client, db):
     assert item["brand"] is None
     assert item["price_pence"] is None
     assert item["line_total_pence"] is None
+
+
+def test_inventory_failed_off_variant_row_still_shows_barcode(client, db):
+    """Always-write-row (3a): an OFF failure now leaves a null-name product_variants row
+    (lookup_status='failed') instead of no row. The inventory report's COALESCE(name, barcode)
+    fallback must render the barcode identically — not an empty name — and add no spurious row."""
+    barcode = "5000000000098"
+    db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
+    db.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity, "
+        "lookup_status, lookup_failure_count, last_lookup_datetime) "
+        "VALUES (?, ?, NULL, NULL, NULL, 'failed', 1, '2026-07-21T10:00:00+00:00')",
+        (barcode, _RETAILER_ID),
+    )
+    db.execute(
+        "INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 2)",
+        (barcode, _RETAILER_ID),
+    )
+    db.commit()
+
+    resp = client.get("/reports/inventory")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 1        # no spurious/duplicate row
+    item = data["items"][0]
+    assert item["name"] == barcode        # barcode fallback, not ""
+    assert item["brand"] is None
+    assert item["price_pence"] is None
 
 
 def test_inventory_off_failed_item_contributes_zero_to_total(client, db):
@@ -397,6 +425,20 @@ def test_unresolved_no_pv_row(client, db):
     assert item["brand"]["label"] == "no_data"
     assert item["quantity"]["label"] == "no_data"
     assert item["price"]["label"] == "missing"
+
+
+def test_label_for_info_field_no_data_vs_missing():
+    """Direct unit test of the I1 distinction: no variant row -> 'no_data'; variant row present
+    with a null field -> 'missing'. A failed-OFF barcode (now a null-data PV row) therefore
+    labels 'missing' where it previously labelled 'no_data'. Pending/failed session status
+    short-circuits both."""
+    from src.api.reports import _label_for_info_field
+
+    assert _label_for_info_field(None, False, None) == "no_data"      # no PV row
+    assert _label_for_info_field(None, True, None) == "missing"       # PV row, null field (I1)
+    assert _label_for_info_field(None, True, "Beans") == "resolved"   # PV row, value present
+    assert _label_for_info_field("pending", True, None) == "pending"  # session status wins
+    assert _label_for_info_field("failed", False, None) == "failed"   # session status wins
 
 
 def test_unresolved_null_data_carry_variant_row(client, db):

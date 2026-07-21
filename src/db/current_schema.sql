@@ -18,6 +18,10 @@ CREATE TABLE product_variants (
     brand       TEXT,
     product_quantity TEXT,
     minimum_quantity INTEGER NOT NULL DEFAULT 0,
+    lookup_status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(lookup_status IN ('pending', 'resolved', 'failed')),
+    lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0),
+    last_lookup_datetime TEXT,
     PRIMARY KEY (barcode, retailer_id)
 );
 CREATE TABLE prices (
@@ -26,6 +30,10 @@ CREATE TABLE prices (
     price_pence INTEGER,
     price_type  TEXT NOT NULL DEFAULT 'unit'
                     CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL,
+    lookup_status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(lookup_status IN ('pending', 'resolved', 'failed')),
+    lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0),
+    last_lookup_datetime TEXT,
     PRIMARY KEY (barcode, retailer_id),
     FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id)
 );

@@ -13,8 +13,8 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
 CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL, delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
@@ -113,6 +113,56 @@ def test_put_minimum_quantity_creates_variant_for_in_system_barcode(client, db):
     assert row["minimum_quantity"] == 4
     # OFF-sourced fields left null (same null-data shape as the migration carry row)
     assert row["name"] is None and row["brand"] is None and row["product_quantity"] is None
+
+
+def test_put_minimum_creates_variant_with_pending_lookup_status(client, db):
+    """The set-minimum upsert on a fresh barcode must leave lookup_status at its 'pending'
+    default (the row was never OFF-resolved) — it must not name the durable columns."""
+    db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
+    db.commit()
+    resp = client.put("/products/5014788110140/1/minimum_quantity", json={"minimum_quantity": 4})
+    assert resp.status_code == 200
+    row = db.execute(
+        "SELECT lookup_status, lookup_failure_count, last_lookup_datetime FROM product_variants "
+        "WHERE barcode = '5014788110140' AND retailer_id = 1"
+    ).fetchone()
+    assert row["lookup_status"] == "pending"
+    assert row["lookup_failure_count"] == 0
+    assert row["last_lookup_datetime"] is None
+
+
+def test_put_minimum_does_not_reset_lookup_status_on_conflict(client, db):
+    """PUT onto an already-resolved variant updates only minimum_quantity; lookup_status and the
+    other durable columns are preserved (ON CONFLICT DO UPDATE must not touch them)."""
+    db.executescript("""
+        INSERT INTO barcodes VALUES ('5014788110140');
+        INSERT INTO product_variants (barcode, retailer_id, name, minimum_quantity, lookup_status, lookup_failure_count, last_lookup_datetime)
+            VALUES ('5014788110140', 1, 'Beans', 1, 'resolved', 0, '2026-07-20T09:00:00+00:00');
+    """)
+    resp = client.put("/products/5014788110140/1/minimum_quantity", json={"minimum_quantity": 6})
+    assert resp.status_code == 200
+    row = db.execute(
+        "SELECT minimum_quantity, lookup_status, last_lookup_datetime FROM product_variants "
+        "WHERE barcode = '5014788110140' AND retailer_id = 1"
+    ).fetchone()
+    assert row["minimum_quantity"] == 6
+    assert row["lookup_status"] == "resolved"  # preserved
+    assert row["last_lookup_datetime"] == "2026-07-20T09:00:00+00:00"
+
+
+def test_product_add_group_creates_variant_with_pending_lookup_status(client, db):
+    """The group-membership add upsert (ON CONFLICT DO NOTHING) leaves lookup_status='pending'
+    on the null-data carry row it creates."""
+    db.executescript("""
+        INSERT INTO barcodes VALUES ('5014788110140');
+        INSERT INTO product_groups (id, name) VALUES (1, 'G');
+    """)
+    resp = client.post("/products/5014788110140/1/groups", json={"group_id": 1})
+    assert resp.status_code == 200
+    row = db.execute(
+        "SELECT lookup_status FROM product_variants WHERE barcode='5014788110140' AND retailer_id=1"
+    ).fetchone()
+    assert row["lookup_status"] == "pending"
 
 
 def test_put_minimum_quantity_zero_is_valid(client, db):
