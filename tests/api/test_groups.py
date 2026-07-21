@@ -28,7 +28,7 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id));
 CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0));
@@ -426,8 +426,12 @@ def test_add_variant_upserts_null_row(client, db):
     gid = client.post("/groups", json={"name": "G"}).json()["id"]
     resp = client.post(f"/groups/{gid}/variants", json={"barcode": "b1"})
     assert resp.status_code == 200
-    pv = db.execute("SELECT name FROM product_variants WHERE barcode='b1' AND retailer_id=?", (_RID,)).fetchone()
+    pv = db.execute(
+        "SELECT name, lookup_status FROM product_variants WHERE barcode='b1' AND retailer_id=?", (_RID,)
+    ).fetchone()
     assert pv is not None and pv["name"] is None
+    # The upsert (ON CONFLICT DO NOTHING) must not name the durable columns, leaving the default.
+    assert pv["lookup_status"] == "pending"
     edge = db.execute(
         "SELECT 1 FROM group_variant_members WHERE group_id=? AND barcode='b1'", (gid,)
     ).fetchone()

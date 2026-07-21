@@ -14,7 +14,7 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
@@ -288,6 +288,28 @@ def test_confirm_pending_check_inside_transaction(client, db):
     assert db.execute(
         "SELECT id FROM sessions WHERE id = ?", (session_id,)
     ).fetchone() is not None
+
+
+def test_confirm_unaffected_by_durable_lookup_columns(client, db):
+    """The confirm gate reads only session_items pending statuses. A failed-OFF item (terminal
+    info='failed'/price='not_possible') with a null-data, lookup_status='failed' product_variants
+    row present must still be confirmable — the durable columns are not consulted."""
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=2,
+               info_status="failed", price_status="not_possible")
+    db.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity, "
+        "lookup_status, lookup_failure_count) VALUES (?, ?, NULL, NULL, NULL, 'failed', 1)",
+        (_BARCODE, _RETAILER_ID),
+    )
+    db.commit()
+
+    resp = client.post("/session/confirm")
+    assert resp.status_code == 200
+    assert resp.json()["applied_items"] == 1
+    qty = db.execute("SELECT quantity FROM inventory WHERE barcode = ?", (_BARCODE,)).fetchone()
+    assert qty["quantity"] == 2
+    assert db.execute("SELECT id FROM sessions LIMIT 1").fetchone() is None
 
 
 # ---------------------------------------------------------------------------

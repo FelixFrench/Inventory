@@ -1015,3 +1015,316 @@ def test_2a_current_schema_matches_migrated():
         assert result.returncode == 0, "initial_schema.sql must remain unchanged"
     finally:
         _safe_unlink(db_path)
+
+
+# ===========================================================================
+# Phase 3a — durable lookup state (a7d2f4e9c1b8)
+# ===========================================================================
+
+_3A_REV = "a7d2f4e9c1b8"
+
+# Schema as of the head 3a chains off (9b7941042b52 / 2a): the post-2a shape, with the group
+# tables present and product_variants/prices WITHOUT the three durable lookup columns 3a adds.
+# Built inline because current_schema.sql is now the *post-3a* shape.
+_PRE_3A_SCHEMA = """
+PRAGMA foreign_keys = ON;
+CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit' CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
+CREATE INDEX idx_session_items_info_pending ON session_items(first_scanned_at) WHERE info_status = 'pending';
+CREATE INDEX idx_session_items_price_pending ON session_items(first_scanned_at) WHERE price_status = 'pending';
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
+CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0));
+CREATE TABLE group_variant_members (group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, PRIMARY KEY (group_id, barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id) ON DELETE CASCADE);
+CREATE TABLE group_group_members (parent_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, child_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, PRIMARY KEY (parent_group_id, child_group_id), CHECK (parent_group_id != child_group_id));
+INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
+"""
+
+_3A_COLUMNS = ("lookup_status", "lookup_failure_count", "last_lookup_datetime")
+
+
+def _build_pre_3a_db(db_path):
+    conn = sqlite3.connect(db_path)
+    for stmt in [s.strip() for s in _PRE_3A_SCHEMA.split(";") if s.strip()]:
+        conn.execute(stmt)
+    conn.commit()
+    conn.close()
+
+
+def _stamp_and_upgrade_3a(db_path):
+    from alembic import command
+    from alembic.config import Config
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.stamp(alembic_cfg, _2A_REV)
+    command.upgrade(alembic_cfg, "head")
+    return alembic_cfg
+
+
+def _seed_pre_3a_rows(db_path):
+    """Seed a resolved variant (with name), a null-name carry variant, and a prices row."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000001'), ('5000000000002')")
+    conn.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name, minimum_quantity) "
+        "VALUES ('5000000000001', 1, 'Baked Beans', 0), "  # OFF-resolved historically
+        "       ('5000000000002', 1, NULL, 3)"              # minimum-only carry row, null name
+    )
+    conn.execute(
+        "INSERT INTO prices (barcode, retailer_id, price_pence, price_type) "
+        "VALUES ('5000000000001', 1, 85, 'unit')"
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_3a_single_head():
+    """After the 3a migration there is exactly one Alembic head, and it chains off 2a."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    script = ScriptDirectory.from_config(alembic_cfg)
+    heads = script.get_heads()
+    assert heads == [_3A_REV], heads
+    assert script.get_revision(_3A_REV).down_revision == _2A_REV
+
+
+def test_3a_adds_durable_columns():
+    """Both product_variants and prices gain the three durable columns with the right
+    types/defaults/nullability."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+        _stamp_and_upgrade_3a(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        for table in ("product_variants", "prices"):
+            cols = {r["name"]: r for r in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+            assert set(_3A_COLUMNS) <= set(cols), table
+
+            assert cols["lookup_status"]["type"] == "TEXT"
+            assert cols["lookup_status"]["notnull"] == 1
+            assert cols["lookup_status"]["dflt_value"] == "'pending'"
+
+            assert cols["lookup_failure_count"]["type"] == "INTEGER"
+            assert cols["lookup_failure_count"]["notnull"] == 1
+            assert cols["lookup_failure_count"]["dflt_value"] in ("0", 0)
+
+            assert cols["last_lookup_datetime"]["type"] == "TEXT"
+            assert cols["last_lookup_datetime"]["notnull"] == 0
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3a_backfill():
+    """product_variants: non-null name -> 'resolved', null name -> 'pending'; prices -> all
+    'resolved'; failure counts 0; last_lookup_datetime left NULL (not stamped 'now')."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+        _seed_pre_3a_rows(db_path)
+        _stamp_and_upgrade_3a(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        resolved = conn.execute(
+            "SELECT lookup_status, lookup_failure_count, last_lookup_datetime "
+            "FROM product_variants WHERE barcode = '5000000000001'"
+        ).fetchone()
+        assert resolved["lookup_status"] == "resolved"
+        assert resolved["lookup_failure_count"] == 0
+        assert resolved["last_lookup_datetime"] is None
+
+        carry = conn.execute(
+            "SELECT lookup_status, minimum_quantity FROM product_variants WHERE barcode = '5000000000002'"
+        ).fetchone()
+        assert carry["lookup_status"] == "pending"   # null name stays pending
+        assert carry["minimum_quantity"] == 3        # untouched by the migration
+
+        price = conn.execute(
+            "SELECT lookup_status, lookup_failure_count, last_lookup_datetime "
+            "FROM prices WHERE barcode = '5000000000001'"
+        ).fetchone()
+        assert price["lookup_status"] == "resolved"
+        assert price["lookup_failure_count"] == 0
+        assert price["last_lookup_datetime"] is None
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3a_downgrade_roundtrip():
+    """upgrade -> downgrade removes all six columns -> re-upgrade restores them; row data
+    (name, price) survives the round trip."""
+    import tempfile
+
+    from alembic import command
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+        _seed_pre_3a_rows(db_path)
+        alembic_cfg = _stamp_and_upgrade_3a(db_path)
+
+        def _cols(table):
+            c = sqlite3.connect(db_path)
+            names = {r[1] for r in c.execute(f"PRAGMA table_info('{table}')").fetchall()}
+            c.close()
+            return names
+
+        assert set(_3A_COLUMNS) <= _cols("product_variants")
+        assert set(_3A_COLUMNS) <= _cols("prices")
+
+        command.downgrade(alembic_cfg, _2A_REV)
+        assert not (set(_3A_COLUMNS) & _cols("product_variants"))
+        assert not (set(_3A_COLUMNS) & _cols("prices"))
+        # Row data intact after dropping the columns.
+        c = sqlite3.connect(db_path)
+        assert c.execute("SELECT COUNT(*) FROM product_variants").fetchone()[0] == 2
+        assert c.execute("SELECT price_pence FROM prices WHERE barcode='5000000000001'").fetchone()[0] == 85
+        c.close()
+
+        command.upgrade(alembic_cfg, "head")
+        assert set(_3A_COLUMNS) <= _cols("product_variants")
+        c = sqlite3.connect(db_path)
+        c.row_factory = sqlite3.Row
+        # Backfill re-runs on the fresh re-add.
+        assert c.execute(
+            "SELECT lookup_status FROM product_variants WHERE barcode='5000000000001'"
+        ).fetchone()["lookup_status"] == "resolved"
+        c.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3a_idempotent_and_backfill_not_rerun():
+    """A guarded re-apply (columns already present, e.g. crash after DDL before Alembic stamp) is
+    a no-op: ADD COLUMN is skipped and the backfill does NOT re-run — so a legitimately-'failed'
+    row is not reset to 'resolved'."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+
+        # Simulate a crash mid-migration: the six columns already added by the auto-committed DDL,
+        # but Alembic never advanced. Then a 'failed' price row and a 'failed' variant exist.
+        conn = sqlite3.connect(db_path)
+        for table in ("product_variants", "prices"):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending','resolved','failed'))")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0)")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN last_lookup_datetime TEXT")
+        conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000009')")
+        conn.execute(
+            "INSERT INTO product_variants (barcode, retailer_id, name, lookup_status, lookup_failure_count) "
+            "VALUES ('5000000000009', 1, NULL, 'failed', 2)"
+        )
+        conn.execute(
+            "INSERT INTO prices (barcode, retailer_id, price_pence, lookup_status, lookup_failure_count) "
+            "VALUES ('5000000000009', 1, NULL, 'failed', 2)"
+        )
+        conn.commit()
+        conn.close()
+
+        _stamp_and_upgrade_3a(db_path)  # must not error and must not re-run the backfill
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        pv = conn.execute(
+            "SELECT lookup_status, lookup_failure_count FROM product_variants WHERE barcode='5000000000009'"
+        ).fetchone()
+        assert pv["lookup_status"] == "failed"       # NOT reset to resolved/pending
+        assert pv["lookup_failure_count"] == 2
+        pr = conn.execute(
+            "SELECT lookup_status, lookup_failure_count FROM prices WHERE barcode='5000000000009'"
+        ).fetchone()
+        assert pr["lookup_status"] == "failed"       # NOT reset to resolved
+        assert pr["lookup_failure_count"] == 2
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3a_check_constraints_enforced():
+    """The new CHECKs (invisible to PRAGMA, hand-carried into current_schema.sql) are real:
+    a bad lookup_status and a negative failure count are rejected."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+        _stamp_and_upgrade_3a(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000003')")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO product_variants (barcode, retailer_id, lookup_status) "
+                "VALUES ('5000000000003', 1, 'bogus')"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO product_variants (barcode, retailer_id, lookup_failure_count) "
+                "VALUES ('5000000000003', 1, -1)"
+            )
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3a_current_schema_matches_migrated():
+    """current_schema.sql's product_variants and prices match a freshly-migrated DB (table_info +
+    FK list + index_list), and initial_schema.sql is unchanged."""
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+        _stamp_and_upgrade_3a(db_path)
+        migrated = sqlite3.connect(db_path)
+
+        # The full current_schema.sql can't be executescript'd (its CREATE TABLE sqlite_sequence
+        # collides with the AUTOINCREMENT auto-create). Slice out just the two altered tables'
+        # CREATE statements; FK targets are unvalidated at CREATE time so they stand alone.
+        schema_path = Path(__file__).parents[2] / "src" / "db" / "current_schema.sql"
+        schema_text = schema_path.read_text()
+        doc_ddl = schema_text[
+            schema_text.index("CREATE TABLE product_variants"):schema_text.index("CREATE TABLE inventory")
+        ]
+        doc = sqlite3.connect(":memory:")
+        doc.executescript(doc_ddl)
+
+        for t in ("product_variants", "prices"):
+            assert _table_shape(migrated, t) == _table_shape(doc, t), t
+        migrated.close()
+        doc.close()
+
+        repo_root = Path(__file__).parents[2]
+        result = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", "src/db/initial_schema.sql"],
+            cwd=repo_root,
+        )
+        assert result.returncode == 0, "initial_schema.sql must remain unchanged"
+    finally:
+        _safe_unlink(db_path)
