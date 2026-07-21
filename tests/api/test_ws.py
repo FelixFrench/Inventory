@@ -101,10 +101,12 @@ def _create_session(db, session_type="in") -> int:
     return db.execute("SELECT id FROM sessions ORDER BY id DESC LIMIT 1").fetchone()["id"]
 
 
-def _make_row(barcode, info_status, price_status, session_delta=1, product_url=None):
+def _make_row(barcode, info_status, price_status, session_delta=1, product_url=None,
+              retailer_id=_RETAILER_ID):
     """Plain dict acting as a poll-query result row."""
     return {
         "barcode": barcode,
+        "retailer_id": retailer_id,
         "info_status": info_status,
         "price_status": price_status,
         "session_delta": session_delta,
@@ -215,7 +217,7 @@ def test_poll_emits_on_first_sighting():
     rows = [_make_row(_BARCODE, "resolved", "resolved")]
     payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
     assert len(payloads) == 1
-    assert last_seen[_BARCODE] == ("resolved", "resolved")
+    assert last_seen[(_BARCODE, _RETAILER_ID)] == ("resolved", "resolved")
     msg = json.loads(payloads[0])
     assert msg["type"] == "resolution"
     assert msg["barcode"] == _BARCODE
@@ -223,23 +225,23 @@ def test_poll_emits_on_first_sighting():
 
 
 def test_poll_emits_on_status_change():
-    last_seen = {_BARCODE: ("pending", "pending")}
+    last_seen = {(_BARCODE, _RETAILER_ID): ("pending", "pending")}
     rows = [_make_row(_BARCODE, "resolved", "pending")]
     payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
     assert len(payloads) == 1
-    assert last_seen[_BARCODE] == ("resolved", "pending")
+    assert last_seen[(_BARCODE, _RETAILER_ID)] == ("resolved", "pending")
 
 
 def test_poll_silent_on_no_change():
-    last_seen = {_BARCODE: ("resolved", "resolved")}
+    last_seen = {(_BARCODE, _RETAILER_ID): ("resolved", "resolved")}
     rows = [_make_row(_BARCODE, "resolved", "resolved")]
     payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
     assert len(payloads) == 0
-    assert last_seen[_BARCODE] == ("resolved", "resolved")
+    assert last_seen[(_BARCODE, _RETAILER_ID)] == ("resolved", "resolved")
 
 
 def test_poll_prunes_removed_barcode():
-    last_seen = {_BARCODE: ("resolved", "resolved")}
+    last_seen = {(_BARCODE, _RETAILER_ID): ("resolved", "resolved")}
     payloads = _compute_poll_updates([], last_seen, _RETAILER_ID)
     assert len(payloads) == 0
     assert last_seen == {}
@@ -411,11 +413,11 @@ def test_cm_broadcast_zero_clients_no_error():
 # ── Item 29: poll emits resolution when price_status flips ──────────────────
 
 def test_poll_emits_on_price_status_change():
-    last_seen = {_BARCODE: ("resolved", "pending")}
+    last_seen = {(_BARCODE, _RETAILER_ID): ("resolved", "pending")}
     rows = [_make_row(_BARCODE, "resolved", "resolved")]
     payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
     assert len(payloads) == 1
-    assert last_seen[_BARCODE] == ("resolved", "resolved")
+    assert last_seen[(_BARCODE, _RETAILER_ID)] == ("resolved", "resolved")
     msg = json.loads(payloads[0])
     assert msg["type"] == "resolution"
     assert msg["barcode"] == _BARCODE

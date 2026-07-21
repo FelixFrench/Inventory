@@ -35,21 +35,22 @@ def _compute_poll_updates(rows, last_seen: dict, retailer_id: int) -> list[str]:
     """Pure sync function. Computes which rows changed, mutates last_seen in-place,
     and returns a list of JSON strings ready to broadcast.
 
-    ``last_seen`` is keyed by barcode only: correct under the single-retailer invariant
-    (one session_items row per (session_id, barcode)). Re-keying to include retailer_id
-    is deferred with the rest of the worker/frontend composite work (Phase 3 / 2e)."""
+    ``last_seen`` is keyed by the composite ``(barcode, retailer_id)`` variant key, matching
+    the session_items PK dimension (session_id is constant for the active session, so it is
+    not part of the key). build_payload still receives the loop's scalar retailer_id
+    unchanged."""
     payloads = []
-    current_barcodes = set()
+    current_keys = set()
     for row in rows:
-        barcode = row["barcode"]
-        current_barcodes.add(barcode)
+        key = (row["barcode"], row["retailer_id"])
+        current_keys.add(key)
         new_status = (row["info_status"], row["price_status"])
-        if last_seen.get(barcode) != new_status:
+        if last_seen.get(key) != new_status:
             payloads.append(json.dumps(build_payload("resolution", row, retailer_id)))
-            last_seen[barcode] = new_status
-    for b in list(last_seen.keys()):
-        if b not in current_barcodes:
-            del last_seen[b]
+            last_seen[key] = new_status
+    for k in list(last_seen.keys()):
+        if k not in current_keys:
+            del last_seen[k]
     return payloads
 
 
@@ -60,7 +61,7 @@ async def _poll_tick(rows, last_seen: dict, retailer_id: int) -> None:
 
 
 async def _session_poll_loop(retailer_id: int) -> None:
-    last_seen: dict[str, tuple[str, str]] = {}
+    last_seen: dict[tuple[str, int], tuple[str, str]] = {}
     conn = get_connection()
     try:
         while True:

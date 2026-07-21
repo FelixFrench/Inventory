@@ -425,15 +425,15 @@ def test_put_delta_updates_row(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 4})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 4})
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["barcode"] == _BARCODE
     assert data["delta"] == 4
     row = db.execute(
-        "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ?",
-        (session_id, _BARCODE)
+        "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ? AND retailer_id = ?",
+        (session_id, _BARCODE, _RETAILER_ID)
     ).fetchone()
     assert row["delta"] == 4
 
@@ -445,13 +445,13 @@ def test_put_delta_zero_allowed(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 0})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 0})
 
     assert resp.status_code == 200
     assert resp.json()["delta"] == 0
     row = db.execute(
-        "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ?",
-        (session_id, _BARCODE)
+        "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ? AND retailer_id = ?",
+        (session_id, _BARCODE, _RETAILER_ID)
     ).fetchone()
     assert row is not None
     assert row["delta"] == 0
@@ -463,7 +463,7 @@ def test_put_delta_negative_rejected(client, db):
     _seed_item(db, _BARCODE, session_id, delta=2,
                info_status="resolved", price_status="resolved")
 
-    resp = client.put(f"/session/items/{_BARCODE}", json={"delta": -1})
+    resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": -1})
     assert resp.status_code == 422
 
 
@@ -473,7 +473,7 @@ def test_put_delta_barcode_not_in_session(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 2})
 
     assert resp.status_code == 404
     assert resp.json()["detail"]["error"] == "item_not_found"
@@ -483,7 +483,7 @@ def test_put_delta_barcode_not_in_session(client, db):
 def test_put_delta_no_active_session(client, db):
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 2})
 
     assert resp.status_code == 409
     assert resp.json()["detail"]["error"] == "no_active_session"
@@ -499,7 +499,7 @@ def test_put_delta_session_total_correct(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 1})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 1})
 
     assert resp.status_code == 200
     assert resp.json()["session_total_delta"] == 3  # 1 + 2
@@ -528,7 +528,7 @@ def test_put_delta_broadcasts_delta_update(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 5})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 5})
 
     assert resp.status_code == 200
     mock_mgr.broadcast.assert_called_once()
@@ -543,7 +543,7 @@ def test_put_delta_broadcasts_delta_update(client, db):
 def test_put_delta_no_broadcast_no_session(client, db):
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 2})
 
     assert resp.status_code == 409
     mock_mgr.broadcast.assert_not_called()
@@ -554,10 +554,24 @@ def test_put_delta_no_broadcast_item_not_found(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 2})
 
     assert resp.status_code == 404
     mock_mgr.broadcast.assert_not_called()
+
+
+def test_put_delta_old_barcode_only_path_gone(client, db):
+    """The pre-2e barcode-only override URL must no longer reach the override handler.
+    The route is now /session/items/{barcode}/{retailer_id}; the single-segment path
+    matches no API route and falls through to the StaticFiles(html=True) catch-all mounted
+    at '/', which permits only GET/HEAD → 405. The point is that a PUT to the old URL no
+    longer resolves to the override (never 200), not the exact fall-through code."""
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved")
+
+    resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 4})
+    assert resp.status_code == 405
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +590,9 @@ def test_get_session_item_includes_inventory_quantity(client, db):
     assert resp.status_code == 200
     item = resp.json()["session"]["items"][0]
     assert item["inventory_quantity"] == 4
+    # Each item carries its composite-key retailer (added in 2e); the frontend keys
+    # feed rows on rowKey(barcode, retailer) when restoring a session from this response.
+    assert item["retailer"] == _RETAILER_ID
 
 
 def test_get_session_item_inventory_quantity_defaults_to_zero(client, db):
