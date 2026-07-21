@@ -38,6 +38,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
     rows = conn.execute(
         """
         SELECT si.barcode,
+               si.retailer_id,
                si.delta,
                si.info_status,
                si.price_status,
@@ -70,6 +71,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
 
         items.append({
             "barcode": r['barcode'],
+            "retailer": r['retailer_id'],
             "delta": r['delta'],
             "inventory_quantity": r['inventory_quantity'],
             "first_scanned_at": r['first_scanned_at'],
@@ -310,7 +312,7 @@ def discard_session() -> DiscardResponse:
         raise _503
 
 
-def _do_put_delta(barcode: str, new_delta: int) -> dict | None:
+def _do_put_delta(barcode: str, retailer_id: int, new_delta: int) -> dict | None:
     conn = get_connection()
     try:
         row = conn.execute("SELECT id FROM sessions LIMIT 1").fetchone()
@@ -318,8 +320,9 @@ def _do_put_delta(barcode: str, new_delta: int) -> dict | None:
             return None
         session_id = row["id"]
         cur = conn.execute(
-            "UPDATE session_items SET delta = ? WHERE session_id = ? AND barcode = ?",
-            (new_delta, session_id, barcode),
+            "UPDATE session_items SET delta = ? "
+            "WHERE session_id = ? AND barcode = ? AND retailer_id = ?",
+            (new_delta, session_id, barcode, retailer_id),
         )
         if cur.rowcount == 0:
             raise ValueError("item_not_found")
@@ -336,24 +339,29 @@ def _do_put_delta(barcode: str, new_delta: int) -> dict | None:
         conn.close()
 
 
-@router.put("/session/items/{barcode}")
+@router.put("/session/items/{barcode}/{retailer_id}")
 async def put_session_item_delta(
-    barcode: str, body: DeltaUpdateRequest, retailer_id: int = Depends(get_retailer_id)
+    barcode: str, retailer_id: int, body: DeltaUpdateRequest
 ) -> dict:
     """
     Update the delta for a specific item in the active session.
 
-    Sets the item's session delta to the supplied value and broadcasts a WebSocket
-    update to all connected clients. A negative delta is rejected at the schema layer
-    (422, DeltaUpdateRequest.delta has ge=0). Returns 404 if the barcode is not in the
-    current session, 409 if no session is active.
+    The item is addressed by the composite ``(barcode, retailer_id)`` variant key (both
+    path segments). Sets the item's session delta to the supplied value and broadcasts a
+    WebSocket update to all connected clients. A negative delta is rejected at the schema
+    layer (422, DeltaUpdateRequest.delta has ge=0). Returns 404 if that variant is not in
+    the current session, 409 if no session is active.
+
+    A nonexistent retailer_id is not special-cased: this addresses a *session item*, not a
+    product variant, so an unknown retailer simply misses the composite WHERE and falls
+    through to the same 404 item_not_found path as an unknown barcode.
     """
     # Defence in depth: schema validation (Field(ge=0)) already rejects negatives
     # with 422 before this handler runs, so this branch is not reachable via HTTP.
     if body.delta < 0:
         raise HTTPException(status_code=400, detail={"error": "invalid_delta"})
     try:
-        result = await asyncio.to_thread(_do_put_delta, barcode, body.delta)
+        result = await asyncio.to_thread(_do_put_delta, barcode, retailer_id, body.delta)
     except ValueError as e:
         if str(e) == "item_not_found":
             raise HTTPException(status_code=404, detail={"error": "item_not_found"})

@@ -54,8 +54,18 @@ function showToast(message, type = 'info') {
     }, 4000);
 }
 
+// Build the composite frontend row key from (barcode, retailer). This is the single
+// source of row-key construction — every page keys rows through it, none concatenate
+// their own key inline. barcode is digits-only (8–14 chars) and retailer is an integer,
+// so ':' can never appear in either component, making it a collision-free separator.
+// String() both components so a numeric 1 (from WebSocket/GET /session JSON) and a
+// string "1" (read back off a data-* attribute) produce the same key.
+function rowKey(barcode, retailer) {
+    return String(barcode) + ':' + String(retailer);
+}
+
 // Exported for the Node test runner (`node --test frontend/`); ignored in the
 // browser, where `module` is undefined and these are plain globals.
 if (typeof module !== 'undefined') {
-    module.exports = { esc, sanitiseHref, showToast };
+    module.exports = { esc, sanitiseHref, showToast, rowKey };
 }
