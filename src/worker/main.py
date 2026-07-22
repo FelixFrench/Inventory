@@ -399,6 +399,10 @@ def _poll_iteration(db: sqlite3.Connection) -> bool:
             logger.info(f"Session {session_id} discarded mid-resolution for {barcode}")
         return True
 
+    # Manual refresh (3c) sits between live scanning and the background scheduler.
+    if _poll_manual(db):
+        return True
+
     return _poll3(db)
 
 
@@ -445,7 +449,12 @@ def _attempt_price(
         conn.close()
 
 
-def _write_off_retry(barcode: str, retailer_id: int, result: dict | None) -> None:
+def _write_off_retry(
+    barcode: str,
+    retailer_id: int,
+    result: dict | None,
+    clear_manual_marker: bool = False,
+) -> None:
     """Write an OFF-retry outcome: durable ``product_variants`` row + OFF timestamp, one txn.
 
     No ``session_items`` stamp (this path has no session context). ``result`` is the OFF dict on
@@ -453,6 +462,12 @@ def _write_off_retry(barcode: str, retailer_id: int, result: dict | None) -> Non
     into ``None`` (§3.1a). Stamping ``worker_state.off_last_called_at`` here keeps ``_pace_off_call``
     correct on the next OFF call. Both timestamps derive from one ``now`` so they cannot straddle a
     second boundary.
+
+    When ``clear_manual_marker`` is True (the 3c manual-refresh path), also clear
+    ``product_variants.manual_refresh_requested`` for this variant IN THE SAME transaction as the
+    durable write, so there is no window where the OFF write committed but the marker is still set
+    (which would re-trigger the refresh and a second OFF call). Reused additively — the background
+    3a/3b callers leave it False and are unaffected.
     """
     conn = get_connection()
     try:
@@ -463,12 +478,77 @@ def _write_off_retry(barcode: str, retailer_id: int, result: dict | None) -> Non
             "UPDATE worker_state SET off_last_called_at = ? WHERE id = 1",
             (now_dt.isoformat(),),
         )
+        if clear_manual_marker:
+            conn.execute(
+                "UPDATE product_variants SET manual_refresh_requested = 0 "
+                "WHERE barcode = ? AND retailer_id = ?",
+                (barcode, retailer_id),
+            )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
+
+
+def _poll_manual(db: sqlite3.Connection) -> bool:
+    """Manual-refresh path (Sprint 2, Phase 3c) — a user-triggered on-demand OFF + price refresh.
+
+    Slotted BETWEEN poll 2 and poll 3: live scanning (poll 1/2) always preempts it, and it preempts
+    the background scheduler (poll 3). Processes AT MOST ONE marked unit per call, then returns, so
+    the loop re-checks live work on the next tick (same single-unit discipline as poll 1/2/3).
+
+    A manual request always attempts: the 24h/30d staleness timers and the failure cap of 5 are
+    deliberately IGNORED here (unlike poll 3), so a user can force a re-resolve of a ``pending``
+    null-data row or retry a ``failed`` row on demand. Still goes through ``_pace_off_call`` and still
+    stamps ``off_last_called_at`` (via ``_write_off_retry``) so cross-iteration OFF pacing holds.
+
+    Never reads or writes ``session_items``. Returns True iff a unit was processed.
+    """
+    # Oldest-first by rowid for FIFO fairness (product_variants is a rowid table — composite PK, not
+    # WITHOUT ROWID). Single-user app, so strict ordering barely matters.
+    row = db.execute(
+        "SELECT barcode, retailer_id FROM product_variants "
+        "WHERE manual_refresh_requested = 1 ORDER BY rowid ASC LIMIT 1"
+    ).fetchone()
+    if not row:
+        return False
+
+    barcode = row['barcode']
+    retailer_id = row['retailer_id']
+    logger.info(f"Barcode {barcode}: manual refresh requested (retailer {retailer_id})")
+
+    _pace_off_call(db)
+    try:
+        result = off.lookup_barcode(barcode)
+    except Exception as e:
+        logger.warning(f"Barcode {barcode}: manual refresh OFF network error — {e}")
+        result = None
+
+    # Collapse "not found" and "found but nameless" into a single failure value (mirrors poll 1 / 3a):
+    # this one value drives both the durable write and the price-chain gate below.
+    if result is None or result.get('name') is None:
+        result = None
+
+    if result is None:
+        logger.info(f"Barcode {barcode}: manual refresh OFF failed (retailer {retailer_id}); marker cleared")
+    else:
+        logger.info(f"Barcode {barcode}: manual refresh OFF resolved (retailer {retailer_id}); marker cleared")
+
+    # Clear the marker in the SAME transaction as the durable OFF write (success or failure).
+    _write_off_retry(barcode, retailer_id, result, clear_manual_marker=True)
+
+    # On OFF success, chain a fresh price lookup UNCONDITIONALLY — a manual refresh re-attempts the
+    # price regardless of an existing prices row (differs from poll 3's chain-only-when-no-prices-row),
+    # to give a genuine full refresh. Mirrors the live poll-1/poll-3 chain call site.
+    if result is not None:
+        logger.info(f"Barcode {barcode}: manual refresh chaining price attempt")
+        _attempt_price(
+            barcode, retailer_id,
+            result['name'], result['brand'], result['product_quantity'],
+        )
+    return True
 
 
 def _poll3(db: sqlite3.Connection) -> bool:

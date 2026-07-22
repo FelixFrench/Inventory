@@ -1086,14 +1086,15 @@ def _seed_pre_3a_rows(db_path):
 
 
 def test_3a_single_head():
-    """After the 3a migration there is exactly one Alembic head, and it chains off 2a."""
+    """The migration graph stays linear through 3a: exactly one head, and 3a chains off 2a.
+    (3c later became the head — see test_3c_single_head — so the head is the current tip, not 3a.)"""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
     script = ScriptDirectory.from_config(alembic_cfg)
     heads = script.get_heads()
-    assert heads == [_3A_REV], heads
+    assert heads == [_3C_REV], heads
     assert script.get_revision(_3A_REV).down_revision == _2A_REV
 
 
@@ -1307,6 +1308,232 @@ def test_3a_current_schema_matches_migrated():
         # The full current_schema.sql can't be executescript'd (its CREATE TABLE sqlite_sequence
         # collides with the AUTOINCREMENT auto-create). Slice out just the two altered tables'
         # CREATE statements; FK targets are unvalidated at CREATE time so they stand alone.
+        schema_path = Path(__file__).parents[2] / "src" / "db" / "current_schema.sql"
+        schema_text = schema_path.read_text()
+        doc_ddl = schema_text[
+            schema_text.index("CREATE TABLE product_variants"):schema_text.index("CREATE TABLE inventory")
+        ]
+        doc = sqlite3.connect(":memory:")
+        doc.executescript(doc_ddl)
+
+        for t in ("product_variants", "prices"):
+            assert _table_shape(migrated, t) == _table_shape(doc, t), t
+        migrated.close()
+        doc.close()
+
+        repo_root = Path(__file__).parents[2]
+        result = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", "src/db/initial_schema.sql"],
+            cwd=repo_root,
+        )
+        assert result.returncode == 0, "initial_schema.sql must remain unchanged"
+    finally:
+        _safe_unlink(db_path)
+
+
+# ===========================================================================
+# Phase 3c — manual-refresh marker (7e7e7787e93d)
+# ===========================================================================
+
+_3C_REV = "7e7e7787e93d"
+
+# Schema as of the head 3c chains off (a7d2f4e9c1b8 / 3a): the post-3a shape, with the three durable
+# lookup columns present on product_variants/prices but WITHOUT the manual_refresh_requested column 3c
+# adds. Built inline because current_schema.sql is now the *post-3c* shape.
+_PRE_3C_SCHEMA = """
+PRAGMA foreign_keys = ON;
+CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending','resolved','failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit' CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending','resolved','failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
+CREATE INDEX idx_session_items_info_pending ON session_items(first_scanned_at) WHERE info_status = 'pending';
+CREATE INDEX idx_session_items_price_pending ON session_items(first_scanned_at) WHERE price_status = 'pending';
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
+CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0));
+CREATE TABLE group_variant_members (group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, PRIMARY KEY (group_id, barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id) ON DELETE CASCADE);
+CREATE TABLE group_group_members (parent_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, child_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, PRIMARY KEY (parent_group_id, child_group_id), CHECK (parent_group_id != child_group_id));
+INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
+"""
+
+
+def _build_pre_3c_db(db_path):
+    conn = sqlite3.connect(db_path)
+    for stmt in [s.strip() for s in _PRE_3C_SCHEMA.split(";") if s.strip()]:
+        conn.execute(stmt)
+    conn.commit()
+    conn.close()
+
+
+def _stamp_and_upgrade_3c(db_path):
+    from alembic import command
+    from alembic.config import Config
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.stamp(alembic_cfg, _3A_REV)
+    command.upgrade(alembic_cfg, "head")
+    return alembic_cfg
+
+
+def test_3c_single_head():
+    """After the 3c migration there is exactly one Alembic head, and it chains off 3a."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    script = ScriptDirectory.from_config(alembic_cfg)
+    heads = script.get_heads()
+    assert heads == [_3C_REV], heads
+    assert script.get_revision(_3C_REV).down_revision == _3A_REV
+
+
+def test_3c_adds_marker():
+    """product_variants gains manual_refresh_requested INTEGER NOT NULL DEFAULT 0."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3c_db(db_path)
+        _stamp_and_upgrade_3c(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cols = {r["name"]: r for r in conn.execute("PRAGMA table_info('product_variants')").fetchall()}
+        assert "manual_refresh_requested" in cols
+        col = cols["manual_refresh_requested"]
+        assert col["type"] == "INTEGER"
+        assert col["notnull"] == 1
+        assert col["dflt_value"] in ("0", 0)
+        # prices is untouched.
+        price_cols = {r[1] for r in conn.execute("PRAGMA table_info('prices')").fetchall()}
+        assert "manual_refresh_requested" not in price_cols
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3c_marker_check_enforced():
+    """The inline CHECK (invisible to PRAGMA, hand-carried into current_schema.sql) rejects a value
+    outside {0, 1}."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3c_db(db_path)
+        _stamp_and_upgrade_3c(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000010')")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO product_variants (barcode, retailer_id, manual_refresh_requested) "
+                "VALUES ('5000000000010', 1, 2)"
+            )
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3c_downgrade_roundtrip():
+    """upgrade -> downgrade removes the column -> re-upgrade restores it; row data survives."""
+    import tempfile
+
+    from alembic import command
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3c_db(db_path)
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000011')")
+        conn.execute(
+            "INSERT INTO product_variants (barcode, retailer_id, name) "
+            "VALUES ('5000000000011', 1, 'Baked Beans')"
+        )
+        conn.commit()
+        conn.close()
+
+        alembic_cfg = _stamp_and_upgrade_3c(db_path)
+
+        def _cols():
+            c = sqlite3.connect(db_path)
+            names = {r[1] for r in c.execute("PRAGMA table_info('product_variants')").fetchall()}
+            c.close()
+            return names
+
+        assert "manual_refresh_requested" in _cols()
+
+        command.downgrade(alembic_cfg, _3A_REV)
+        assert "manual_refresh_requested" not in _cols()
+        c = sqlite3.connect(db_path)
+        assert c.execute(
+            "SELECT name FROM product_variants WHERE barcode='5000000000011'"
+        ).fetchone()[0] == "Baked Beans"
+        c.close()
+
+        command.upgrade(alembic_cfg, "head")
+        assert "manual_refresh_requested" in _cols()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3c_idempotent_preserves_set_marker():
+    """A guarded re-apply (column already present, e.g. crash after DDL before Alembic stamp) is a
+    no-op: ADD COLUMN is skipped and a marker set to 1 in between is NOT re-zeroed (there is no
+    backfill)."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3c_db(db_path)
+
+        # Simulate a crash mid-migration: the column already added by auto-committed DDL, Alembic
+        # never advanced, and a marker was set to 1 before the recovery re-run.
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "ALTER TABLE product_variants ADD COLUMN manual_refresh_requested INTEGER NOT NULL "
+            "DEFAULT 0 CHECK(manual_refresh_requested IN (0, 1))"
+        )
+        conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000012')")
+        conn.execute(
+            "INSERT INTO product_variants (barcode, retailer_id, manual_refresh_requested) "
+            "VALUES ('5000000000012', 1, 1)"
+        )
+        conn.commit()
+        conn.close()
+
+        _stamp_and_upgrade_3c(db_path)  # must not error and must not re-zero the marker
+
+        conn = sqlite3.connect(db_path)
+        marker = conn.execute(
+            "SELECT manual_refresh_requested FROM product_variants WHERE barcode='5000000000012'"
+        ).fetchone()[0]
+        assert marker == 1
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3c_current_schema_matches_migrated():
+    """current_schema.sql's product_variants matches a freshly-migrated DB (table_info + FK list +
+    index_list), and initial_schema.sql is unchanged."""
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3c_db(db_path)
+        _stamp_and_upgrade_3c(db_path)
+        migrated = sqlite3.connect(db_path)
+
         schema_path = Path(__file__).parents[2] / "src" / "db" / "current_schema.sql"
         schema_text = schema_path.read_text()
         doc_ddl = schema_text[

@@ -9,8 +9,13 @@ import pytest
 from starlette.testclient import TestClient
 
 from src.api.dependencies import get_db, verify_api_key
-from src.api.main import _compute_poll_updates, app
-from src.api.routers.ws import _status_to_wire, build_payload, manager
+from src.api.main import _compute_poll_updates, _compute_refresh_updates, app
+from src.api.routers.ws import (
+    _status_to_wire,
+    build_payload,
+    build_refresh_notification,
+    manager,
+)
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -461,3 +466,158 @@ def test_build_payload_resolution_price_url_none_when_absent():
     row = _make_row(_BARCODE, "resolved", "resolved", product_url=None)
     payload = build_payload("resolution", row, _RETAILER_ID)
     assert payload["price_url"] is None
+
+
+# ---------------------------------------------------------------------------
+# build_refresh_notification — the 'refresh' event (3c)
+# ---------------------------------------------------------------------------
+
+def _make_refresh_row(barcode=_BARCODE, retailer_id=_RETAILER_ID, *, lookup_status="resolved",
+                      name="Baked Beans", brand="Heinz", product_quantity="415g", off_ts=None,
+                      price_pence=120, price_type="unit", product_url="https://x/p",
+                      price_status="resolved", price_ts=None):
+    """Plain dict acting as a REFRESH_POLL_QUERY result row (product_variants LEFT JOIN prices)."""
+    return {
+        "barcode": barcode,
+        "retailer_id": retailer_id,
+        "lookup_status": lookup_status,
+        "name": name,
+        "brand": brand,
+        "product_quantity": product_quantity,
+        "off_ts": off_ts,
+        "price_pence": price_pence,
+        "price_type": price_type,
+        "product_url": product_url,
+        "price_status": price_status,
+        "price_ts": price_ts,
+    }
+
+
+def test_build_refresh_shape_all_resolved():
+    row = _make_refresh_row(off_ts="2026-07-22T10:00:00+00:00", price_ts="2026-07-22T10:00:04+00:00")
+    p = build_refresh_notification(row)
+    assert p["type"] == "refresh"
+    assert p["barcode"] == _BARCODE
+    assert p["retailer"] == _RETAILER_ID and isinstance(p["retailer"], int)
+    assert p["off_status"] == "resolved"
+    assert p["price_status"] == "resolved"
+    assert p["name"] == "Baked Beans"
+    assert p["brand"] == "Heinz"
+    assert p["quantity"] == "415g"          # wire field is 'quantity' (1a), value is product_quantity
+    assert p["price_pence"] == 120          # raw integer pence, NOT /100
+    assert p["price_type"] == "unit"
+    assert p["product_url"] == "https://x/p"
+    assert p["off_url"]                      # server-built, non-empty
+
+
+def test_build_refresh_off_failed_nulls_off_fields():
+    """OFF-failed refresh carries name/brand/quantity = null (value-gating); the page keeps what it
+    already shows."""
+    row = _make_refresh_row(lookup_status="failed", price_status="resolved")
+    p = build_refresh_notification(row)
+    assert p["off_status"] == "failed"
+    assert p["name"] is None
+    assert p["brand"] is None
+    assert p["quantity"] is None
+    # Price side still resolved and carried.
+    assert p["price_status"] == "resolved"
+    assert p["price_pence"] == 120
+
+
+def test_build_refresh_price_failed_nulls_price_fields():
+    row = _make_refresh_row(price_status="failed")
+    p = build_refresh_notification(row)
+    assert p["price_status"] == "failed"
+    assert p["price_pence"] is None
+    assert p["product_url"] is None
+    # OFF side unaffected.
+    assert p["off_status"] == "resolved"
+    assert p["name"] == "Baked Beans"
+
+
+def test_build_refresh_no_prices_row_maps_to_failed():
+    """A LEFT-JOIN row with no prices row (price_status = None) maps to wire 'failed' with null price
+    fields — _status_to_wire(None) already gives 'failed'."""
+    row = _make_refresh_row(price_status=None, price_pence=None, product_url=None, price_type=None)
+    p = build_refresh_notification(row)
+    assert p["price_status"] == "failed"
+    assert p["price_pence"] is None
+    assert p["product_url"] is None
+
+
+def test_build_refresh_pending_off_maps_to_loading_and_nulls():
+    row = _make_refresh_row(lookup_status="pending")
+    p = build_refresh_notification(row)
+    assert p["off_status"] == "loading"
+    assert p["name"] is None and p["quantity"] is None
+
+
+# ---------------------------------------------------------------------------
+# _compute_refresh_updates — poll-loop refresh detection (3c)
+# ---------------------------------------------------------------------------
+
+def _refresh_rows(**kw):
+    return [_make_refresh_row(**kw)]
+
+
+def test_refresh_detection_new_row_with_timestamp_emits():
+    last = {}
+    out = _compute_refresh_updates(_refresh_rows(off_ts="2026-07-22T10:00:00+00:00"), last)
+    assert len(out) == 1
+    assert json.loads(out[0])["type"] == "refresh"
+    assert last[(_BARCODE, _RETAILER_ID)] == ("2026-07-22T10:00:00+00:00", None)
+
+
+def test_refresh_detection_new_all_null_row_is_silent_baseline():
+    """A brand-new row whose off_ts and price_ts are BOTH NULL records a silent baseline (no emit),
+    then emits once a timestamp appears."""
+    last = {}
+    out = _compute_refresh_updates(_refresh_rows(lookup_status="pending", off_ts=None, price_status=None,
+                                                 price_pence=None, product_url=None, price_type=None,
+                                                 price_ts=None), last)
+    assert out == []
+    assert last[(_BARCODE, _RETAILER_ID)] == (None, None)
+
+    # Now OFF resolves — timestamp goes non-NULL — so it emits.
+    out2 = _compute_refresh_updates(_refresh_rows(off_ts="2026-07-22T10:00:00+00:00"), last)
+    assert len(out2) == 1
+
+
+def test_refresh_detection_advanced_timestamp_emits():
+    last = {(_BARCODE, _RETAILER_ID): ("2026-07-22T10:00:00+00:00", None)}
+    out = _compute_refresh_updates(_refresh_rows(off_ts="2026-07-22T11:00:00+00:00"), last)
+    assert len(out) == 1
+    assert last[(_BARCODE, _RETAILER_ID)] == ("2026-07-22T11:00:00+00:00", None)
+
+
+def test_refresh_detection_price_ts_null_to_non_null_emits():
+    last = {(_BARCODE, _RETAILER_ID): ("2026-07-22T10:00:00+00:00", None)}
+    out = _compute_refresh_updates(
+        _refresh_rows(off_ts="2026-07-22T10:00:00+00:00", price_ts="2026-07-22T10:00:04+00:00"), last
+    )
+    assert len(out) == 1
+
+
+def test_refresh_detection_unchanged_is_silent():
+    last = {(_BARCODE, _RETAILER_ID): ("2026-07-22T10:00:00+00:00", "2026-07-22T10:00:04+00:00")}
+    out = _compute_refresh_updates(
+        _refresh_rows(off_ts="2026-07-22T10:00:00+00:00", price_ts="2026-07-22T10:00:04+00:00"), last
+    )
+    assert out == []
+
+
+def test_refresh_detection_stays_null_is_silent():
+    last = {(_BARCODE, _RETAILER_ID): (None, None)}
+    out = _compute_refresh_updates(
+        _refresh_rows(lookup_status="pending", off_ts=None, price_status=None, price_pence=None,
+                      product_url=None, price_type=None, price_ts=None), last
+    )
+    assert out == []
+
+
+def test_refresh_detection_prunes_removed_rows():
+    last = {("gone", _RETAILER_ID): ("2026-07-22T09:00:00+00:00", None)}
+    out = _compute_refresh_updates(_refresh_rows(off_ts="2026-07-22T10:00:00+00:00"), last)
+    assert len(out) == 1
+    assert ("gone", _RETAILER_ID) not in last
+    assert (_BARCODE, _RETAILER_ID) in last

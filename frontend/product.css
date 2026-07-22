@@ -1,5 +1,17 @@
 /* Product-info page. Shared layout/typography/toasts come from base.css. */
 
+/* Product name + Refresh control on one row; the button stays right-aligned and wraps below on
+   narrow screens (mobile-first). */
+.detail-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.refresh-btn { font-size: 0.85rem; flex-shrink: 0; }
+/* Reuse base.css's spinner keyframes: a refreshing button grows a small spinning circle after its
+   label. Disabled styling comes from .btn-print:disabled in base.css. */
+.refresh-btn.is-refreshing::after {
+    content: ''; display: inline-block; width: 12px; height: 12px; margin-left: 8px;
+    border: 2px solid #ccc; border-top-color: #444; border-radius: 50%;
+    animation: spin 0.8s linear infinite; vertical-align: middle;
+}
+
 .product-sub { color: #666; font-size: 0.95rem; margin: -12px 0 20px; }
 
 .fields { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }

@@ -13,7 +13,7 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, manual_refresh_requested INTEGER NOT NULL DEFAULT 0 CHECK(manual_refresh_requested IN (0, 1)), PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
@@ -461,3 +461,129 @@ def test_product_add_group_membership_requires_auth(client_no_auth, db):
     """)
     resp = client_no_auth.post("/products/5014788110140/1/groups", json={"group_id": 1})
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# POST /products/{barcode}/{retailer_id}/refresh — manual refresh (3c)
+# ---------------------------------------------------------------------------
+
+def test_refresh_returns_202_and_marks(client, db):
+    """202 for an in-system barcode with an existing variant; sets manual_refresh_requested=1."""
+    db.executescript("""
+        INSERT INTO barcodes VALUES ('5014788110140');
+        INSERT INTO product_variants (barcode, retailer_id, name) VALUES ('5014788110140', 1, 'Baked Beans');
+    """)
+    resp = client.post("/products/5014788110140/1/refresh")
+    assert resp.status_code == 202
+    assert resp.json() == {"status": "queued", "barcode": "5014788110140", "retailer_id": 1}
+    marker = db.execute(
+        "SELECT manual_refresh_requested FROM product_variants WHERE barcode='5014788110140' AND retailer_id=1"
+    ).fetchone()[0]
+    assert marker == 1
+
+
+def test_refresh_upserts_null_data_variant(client, db):
+    """A barcode present in barcodes but with no product_variants row gets a null-data pending row
+    with marker=1, touching nothing else."""
+    db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
+    db.commit()
+    resp = client.post("/products/5014788110140/1/refresh")
+    assert resp.status_code == 202
+    row = db.execute(
+        "SELECT name, brand, product_quantity, minimum_quantity, lookup_status, "
+        "lookup_failure_count, last_lookup_datetime, manual_refresh_requested "
+        "FROM product_variants WHERE barcode='5014788110140' AND retailer_id=1"
+    ).fetchone()
+    assert row["name"] is None
+    assert row["brand"] is None
+    assert row["product_quantity"] is None
+    assert row["minimum_quantity"] == 0
+    assert row["lookup_status"] == "pending"
+    assert row["lookup_failure_count"] == 0
+    assert row["last_lookup_datetime"] is None
+    assert row["manual_refresh_requested"] == 1
+
+
+def test_refresh_conflict_preserves_all_other_columns(client, db):
+    """On an existing variant, refresh sets ONLY the marker; every other column is unchanged."""
+    db.executescript("""
+        INSERT INTO barcodes VALUES ('5014788110140');
+        INSERT INTO product_variants
+            (barcode, retailer_id, name, brand, product_quantity, minimum_quantity,
+             lookup_status, lookup_failure_count, last_lookup_datetime, manual_refresh_requested)
+            VALUES ('5014788110140', 1, 'Baked Beans', 'Heinz', '415g', 4,
+                    'failed', 3, '2026-07-01T00:00:00+00:00', 0);
+    """)
+    db.commit()
+    resp = client.post("/products/5014788110140/1/refresh")
+    assert resp.status_code == 202
+    row = db.execute(
+        "SELECT name, brand, product_quantity, minimum_quantity, lookup_status, "
+        "lookup_failure_count, last_lookup_datetime, manual_refresh_requested "
+        "FROM product_variants WHERE barcode='5014788110140' AND retailer_id=1"
+    ).fetchone()
+    assert row["name"] == "Baked Beans"
+    assert row["brand"] == "Heinz"
+    assert row["product_quantity"] == "415g"
+    assert row["minimum_quantity"] == 4
+    assert row["lookup_status"] == "failed"
+    assert row["lookup_failure_count"] == 3
+    assert row["last_lookup_datetime"] == "2026-07-01T00:00:00+00:00"
+    assert row["manual_refresh_requested"] == 1
+
+
+def test_refresh_is_idempotent(client, db):
+    """A second call before the worker processes leaves the marker at 1 (not 2, not reset)."""
+    db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
+    db.commit()
+    assert client.post("/products/5014788110140/1/refresh").status_code == 202
+    assert client.post("/products/5014788110140/1/refresh").status_code == 202
+    marker = db.execute(
+        "SELECT manual_refresh_requested FROM product_variants WHERE barcode='5014788110140' AND retailer_id=1"
+    ).fetchone()[0]
+    assert marker == 1
+
+
+def test_refresh_barcode_not_found(client, db):
+    """A barcode absent from barcodes returns 404 barcode_not_found (FK IntegrityError, rolled back)."""
+    resp = client.post("/products/9999999999999/1/refresh")
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "barcode_not_found"}
+    assert db.execute("SELECT 1 FROM product_variants").fetchone() is None
+
+
+def test_refresh_retailer_not_found(client, db):
+    """A nonexistent retailer_id returns 404 retailer_not_found (guarded before the upsert)."""
+    db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
+    db.commit()
+    resp = client.post("/products/5014788110140/999/refresh")
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "retailer_not_found"}
+    assert db.execute("SELECT 1 FROM product_variants WHERE retailer_id=999").fetchone() is None
+
+
+def test_refresh_requires_auth(client_no_auth, db):
+    """Returns 401 when no API key header is provided."""
+    db.executescript("""
+        INSERT INTO barcodes VALUES ('5014788110140');
+        INSERT INTO product_variants (barcode, retailer_id) VALUES ('5014788110140', 1);
+    """)
+    resp = client_no_auth.post("/products/5014788110140/1/refresh")
+    assert resp.status_code == 401
+    # The endpoint did nothing (auth rejected before the handler): marker still 0.
+    marker = db.execute(
+        "SELECT manual_refresh_requested FROM product_variants WHERE barcode='5014788110140' AND retailer_id=1"
+    ).fetchone()[0]
+    assert marker == 0
+
+
+def test_refresh_makes_no_network_call(client, db):
+    """The endpoint performs no OFF/Sainsbury's/network call — only a DB write. The products router
+    imports no OFF/scraper client, so any outbound call would have to go through the worker modules;
+    patching them to explode proves the request path never touches them."""
+    db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
+    db.commit()
+    with patch("src.worker.off.lookup_barcode", side_effect=AssertionError("OFF must not be called")), \
+         patch("src.worker.sainsburys.get_price", side_effect=AssertionError("price must not be called")):
+        resp = client.post("/products/5014788110140/1/refresh")
+    assert resp.status_code == 202

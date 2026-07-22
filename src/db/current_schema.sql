@@ -22,6 +22,8 @@ CREATE TABLE product_variants (
                     CHECK(lookup_status IN ('pending', 'resolved', 'failed')),
     lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0),
     last_lookup_datetime TEXT,
+    manual_refresh_requested INTEGER NOT NULL DEFAULT 0
+                    CHECK(manual_refresh_requested IN (0, 1)),
     PRIMARY KEY (barcode, retailer_id)
 );
 CREATE TABLE prices (
