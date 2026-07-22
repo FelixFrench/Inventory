@@ -81,6 +81,57 @@ def set_minimum_quantity(
         return JSONResponse(status_code=500, content={"error": "internal_error"})
 
 
+@router.post("/products/{barcode}/{retailer_id}/refresh", response_model=None)
+def request_manual_refresh(
+    barcode: str,
+    retailer_id: int,
+    db: sqlite3.Connection = Depends(get_db),
+) -> JSONResponse:
+    """
+    Queue an on-demand OFF + price refresh for a product variant (Sprint 2, Phase 3c).
+
+    This handler performs NO OpenFoodFacts or Sainsbury's call — it only records a request marker
+    in the DB, preserving the single-OFF-caller invariant (3a/3b): the single worker process picks
+    the marked row up on its next poll, performs the paced OFF call + chained price lookup, and
+    clears the marker. So FastAPI never calls OFF; the worker does.
+
+    Marks the variant by upserting the row for (barcode, retailer_id): a fresh INSERT creates a
+    null-data pending variant row carrying only manual_refresh_requested = 1 (all other columns at
+    their defaults), so a never-resolved barcode is refreshable (mirrors the 1c set-minimum upsert).
+    On CONFLICT it sets ONLY manual_refresh_requested = 1 — name/brand/product_quantity/
+    minimum_quantity/lookup_status/lookup_failure_count/last_lookup_datetime are left untouched.
+    Idempotent: a second call before the worker processes leaves the marker at 1.
+
+    An unknown retailer_id -> 404 retailer_not_found (checked before the upsert). A barcode with no
+    barcodes row violates the FK and returns 404 barcode_not_found. Returns 202 Accepted.
+    """
+    try:
+        guard = _retailer_missing_response(db, retailer_id)
+        if guard is not None:
+            return guard
+        db.execute(
+            "INSERT INTO product_variants (barcode, retailer_id, manual_refresh_requested) "
+            "VALUES (?, ?, 1) "
+            "ON CONFLICT(barcode, retailer_id) DO UPDATE SET manual_refresh_requested = 1",
+            (barcode, retailer_id),
+        )
+        db.commit()
+        return JSONResponse(
+            status_code=202,
+            content={"status": "queued", "barcode": barcode, "retailer_id": retailer_id},
+        )
+    except sqlite3.IntegrityError:
+        db.rollback()  # release the implicit transaction from the failed FK insert
+        return JSONResponse(status_code=404, content={"error": "barcode_not_found"})
+    except HTTPException:
+        raise
+    except sqlite3.OperationalError:
+        raise _503
+    except Exception as e:
+        logger.error("DB error queueing manual refresh for %s: %s", barcode, e)
+        return JSONResponse(status_code=500, content={"error": "internal_error"})
+
+
 @router.get("/products/{barcode}/{retailer_id}", response_model=None)
 def get_product_detail(
     barcode: str,

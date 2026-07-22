@@ -57,6 +57,30 @@ JOIN   sessions s ON s.id = si.session_id
 """
 
 
+# Refresh-broadcast poll query for the FastAPI background task (_session_poll_loop in main.py).
+# A LEFT JOIN of the two durable cache tables on (barcode, retailer_id): product_variants is the OFF
+# side (its lookup_status/last_lookup_datetime), prices the price side (aliased price_status /
+# price_ts; NULL for every price column when no prices row exists). The column list is the contract
+# consumed by build_refresh_notification and _compute_refresh_updates — keep them in sync.
+REFRESH_POLL_QUERY = """
+SELECT pv.barcode,
+       pv.retailer_id,
+       pv.lookup_status,
+       pv.name,
+       pv.brand,
+       pv.product_quantity,
+       pv.last_lookup_datetime AS off_ts,
+       pr.price_pence,
+       pr.price_type,
+       pr.product_url,
+       pr.lookup_status         AS price_status,
+       pr.last_lookup_datetime  AS price_ts
+FROM   product_variants pv
+LEFT   JOIN prices pr
+           ON pr.barcode = pv.barcode AND pr.retailer_id = pv.retailer_id
+"""
+
+
 @router.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     """
@@ -135,4 +159,55 @@ def build_scan_notification(barcode: str, retailer_id: int) -> dict:
         "barcode": barcode,
         "retailer": retailer_id,
         "in_session": False,
+    }
+
+
+def build_refresh_notification(row) -> dict:
+    """Lean 'refresh' payload for a session-less durable write (Sprint 2, Phase 3c).
+
+    Analogous to build_scan_notification, but carries the refreshed OFF/price fields so an open
+    product page can update in place. Fired by the FastAPI poll loop when a durable lookup timestamp
+    advances (manual refresh, or the 3b background scheduler). ``row`` is a LEFT JOIN of
+    product_variants (aliased ``lookup_status`` = the OFF side) and prices (aliased ``price_status``
+    = prices.lookup_status, NULL when no prices row exists).
+
+    Reuses build_payload's DB->wire status mapping (``_status_to_wire``: pending->loading,
+    resolved->resolved, everything else incl. NULL/absent->failed) and its value-gating invariant: a
+    field's value is carried only when its wire status is 'resolved', else null. So an OFF-failed
+    refresh carries name/brand/quantity=null (the page keeps what it shows); a price-failed or
+    not-attempted refresh carries price_pence/product_url=null. Unlike build_payload's 'price' field,
+    price_pence is the raw integer pence (not /100), per the 3c wire shape.
+    """
+    off_wire = _status_to_wire(row["lookup_status"])
+    price_wire = _status_to_wire(row["price_status"])
+
+    if off_wire == "resolved":
+        name_val = row["name"]
+        brand_val = row["brand"]
+        quantity_val = row["product_quantity"]
+    else:
+        name_val = brand_val = quantity_val = None
+
+    if price_wire == "resolved":
+        price_pence_val = row["price_pence"]
+        price_type_val = row["price_type"]
+        product_url_val = row["product_url"]
+    else:
+        price_pence_val = None
+        product_url_val = None
+        price_type_val = row["price_type"]  # carried through, benign (schema DEFAULT 'unit')
+
+    return {
+        "type": "refresh",
+        "barcode": row["barcode"],
+        "retailer": row["retailer_id"],
+        "off_status": off_wire,
+        "price_status": price_wire,
+        "name": name_val,
+        "brand": brand_val,
+        "quantity": quantity_val,
+        "price_pence": price_pence_val,
+        "price_type": price_type_val,
+        "product_url": product_url_val,
+        "off_url": build_off_url(row["barcode"], name=name_val),
     }

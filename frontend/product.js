@@ -10,6 +10,15 @@ const RETAILER_ID = params.get('retailer_id') || '1';
 let currentGroups = [];   // memberships on this variant: [{id, name, group_page_url}]
 let allGroups = [];       // every group from GET /groups, for the add dropdown
 
+// Last-rendered product fields, so a live 'refresh' event can apply only the fields it carries a
+// value for and keep everything else on screen (see mergeRefreshFields).
+let lastData = null;
+// Set when the user clicks Refresh; cleared by the matching 'refresh' WS event. Distinguishes a
+// user-triggered refresh (toast on failure) from a background 3b refresh (silent).
+let awaitingManualRefresh = false;
+let ws = null;
+const WS_RECONNECT_DELAY = 2000;
+
 function api(path, opts = {}) {
     return fetch(path, {
         ...opts,
@@ -79,6 +88,7 @@ function renderLinks(data) {
 }
 
 function render(data) {
+    lastData = data;
     currentGroups = data.groups || [];
 
     const nameEl = document.getElementById('product-name');
@@ -193,23 +203,151 @@ async function refresh() {
     render(await resp.json());
 }
 
-// Event delegation for per-row remove buttons (the list re-renders on every change).
-document.getElementById('membership-list').addEventListener('click', e => {
-    const btn = e.target.closest('.remove-btn');
-    if (btn) removeFromGroup(btn.dataset.groupId);
-});
-document.getElementById('min-save').addEventListener('click', saveMinimum);
-document.getElementById('add-group-btn').addEventListener('click', addToGroup);
+// --- Manual refresh (3c) -----------------------------------------------------
+// FastAPI never calls OFF: the POST only marks the variant; the single worker performs the paced
+// OFF + price refresh and writes the durable rows, and FastAPI's poll loop then broadcasts a
+// 'refresh' WS event that this page applies live.
 
-(async function init() {
-    if (!BARCODE) {
-        showError('No barcode specified.');
-        return;
-    }
+function setRefreshLoading(on) {
+    const btn = document.getElementById('refresh-btn');
+    if (!btn) return;
+    btn.disabled = on;
+    btn.classList.toggle('is-refreshing', on);
+    btn.textContent = on ? 'Refreshing…' : 'Refresh';
+}
+
+async function requestManualRefresh() {
+    awaitingManualRefresh = true;
+    setRefreshLoading(true);
     try {
-        await refresh();
-        await loadGroups();
+        const resp = await api(`${productPath()}/refresh`, { method: 'POST' });
+        if (!resp.ok) throw new Error('Server error ' + resp.status);
+        // Keep the loading state + flag until the matching 'refresh' WS event arrives.
     } catch (_) {
-        showError('Could not load product. Check connection.');
+        awaitingManualRefresh = false;
+        setRefreshLoading(false);
+        showToast('Could not start refresh', 'error');
     }
-})();
+}
+
+// Does this WS message target the product currently on the page?
+function refreshEventMatches(msg, barcode, retailerId) {
+    return !!msg && msg.type === 'refresh'
+        && rowKey(msg.barcode, msg.retailer) === rowKey(barcode, retailerId);
+}
+
+// Decide what to do with a matching 'refresh' event. Pure — no DOM. Returns {apply, toast}:
+//   - awaiting + OFF resolved  -> apply the new values (success; a price sub-failure is still a
+//     success — the non-null merge simply keeps the old price).
+//   - awaiting + OFF failed    -> do NOT apply; toast "keeping old values".
+//   - not awaiting (background) -> apply silently, no toast.
+// The caller clears awaitingManualRefresh whenever it was set (we consumed this event for it).
+function decideRefreshAction(msg, awaiting) {
+    if (awaiting) {
+        if (msg.off_status === 'resolved') return { apply: true, toast: null };
+        if (msg.off_status === 'failed') {
+            return { apply: false, toast: 'Refresh failed — keeping old values' };
+        }
+        return { apply: false, toast: null };   // 'loading' — not expected on a terminal refresh
+    }
+    return { apply: true, toast: null };
+}
+
+// Merge a 'refresh' event's fields over the current data, applying each ONLY when the event carries
+// a non-null value for it — so a value-gated null (OFF/price sub-failure) never blanks data that is
+// still validly cached and displayed. Pure — no DOM. Note the wire field is `quantity` (1a), mapped
+// back onto product_quantity for the render path.
+function mergeRefreshFields(current, msg) {
+    const merged = Object.assign({}, current || {});
+    if (msg.name != null) merged.name = msg.name;
+    if (msg.brand != null) merged.brand = msg.brand;
+    if (msg.quantity != null) merged.product_quantity = msg.quantity;
+    if (msg.price_pence != null) {
+        merged.price_pence = msg.price_pence;
+        merged.price_type = msg.price_type;
+    }
+    if (msg.off_url != null) merged.off_url = msg.off_url;
+    if (msg.product_url != null) merged.product_url = msg.product_url;
+    return merged;
+}
+
+// Apply a matching 'refresh' event to the page in place (name, brand·quantity subline, price, links).
+// Does NOT touch on-hand quantity, minimum, or group membership — the event carries none of those.
+function applyRefreshEvent(msg) {
+    lastData = mergeRefreshFields(lastData, msg);
+
+    const nameEl = document.getElementById('product-name');
+    if (lastData.name) {
+        nameEl.textContent = lastData.name;
+        nameEl.classList.remove('muted');
+    }
+
+    const subParts = [];
+    if (lastData.brand) subParts.push(esc(lastData.brand));
+    if (lastData.product_quantity) subParts.push(esc(lastData.product_quantity));
+    if (subParts.length) {
+        document.getElementById('product-sub').innerHTML = subParts.join(' · ');
+    }
+
+    const price = formatPrice(lastData.price_pence, lastData.price_type);
+    document.getElementById('price').textContent = price || '—';
+
+    renderLinks(lastData);
+}
+
+function handleRefreshMessage(msg) {
+    if (!refreshEventMatches(msg, BARCODE, RETAILER_ID)) return;
+    setRefreshLoading(false);
+    const wasAwaiting = awaitingManualRefresh;
+    awaitingManualRefresh = false;   // consumed — a chained second (price) event is a background update
+    const action = decideRefreshAction(msg, wasAwaiting);
+    if (action.apply) applyRefreshEvent(msg);
+    if (action.toast) showToast(action.toast, 'error');
+}
+
+function connectWS() {
+    ws = new WebSocket(`ws://${window.location.host}/ws`);
+    ws.onmessage = (event) => {
+        let msg;
+        try {
+            msg = JSON.parse(event.data);
+        } catch (_) {
+            return;
+        }
+        // Only 'refresh' events concern this page; every other type (scan/resolution/delta_update)
+        // is silently ignored.
+        if (msg && msg.type === 'refresh') handleRefreshMessage(msg);
+    };
+    ws.onclose = () => { setTimeout(connectWS, WS_RECONNECT_DELAY); };
+}
+
+// --- Wiring (browser only; guarded so the module can be required in node --test) -----------------
+if (typeof document !== 'undefined') {
+    // Event delegation for per-row remove buttons (the list re-renders on every change).
+    document.getElementById('membership-list').addEventListener('click', e => {
+        const btn = e.target.closest('.remove-btn');
+        if (btn) removeFromGroup(btn.dataset.groupId);
+    });
+    document.getElementById('min-save').addEventListener('click', saveMinimum);
+    document.getElementById('add-group-btn').addEventListener('click', addToGroup);
+    document.getElementById('refresh-btn').addEventListener('click', requestManualRefresh);
+
+    (async function init() {
+        if (!BARCODE) {
+            showError('No barcode specified.');
+            return;
+        }
+        try {
+            await refresh();
+            await loadGroups();
+            connectWS();
+        } catch (_) {
+            showError('Could not load product. Check connection.');
+        }
+    })();
+}
+
+// Exported for the Node test runner (`node --test frontend/product.test.js`); ignored in the browser.
+if (typeof module !== 'undefined') {
+    module.exports = { refreshEventMatches, decideRefreshAction, mergeRefreshFields };
+}
