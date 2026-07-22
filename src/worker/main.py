@@ -4,7 +4,7 @@ import logging
 import sqlite3
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECS = 5
 OFF_RATE_LIMIT_SECS = 4
+
+# Poll-3 (background retry/refresh) cadence. Failed OFF/price lookups are retried no more often than
+# once per interval; resolved prices are refreshed for inflation on a slower cadence. LOOKUP_FAILURE_CAP
+# stops a permanently-dead barcode/price from being retried forever.
+OFF_RETRY_INTERVAL = timedelta(hours=24)
+PRICE_RETRY_INTERVAL = timedelta(hours=24)
+PRICE_REFRESH_INTERVAL = timedelta(days=30)
+LOOKUP_FAILURE_CAP = 5
 
 
 def _compute_startup_sleep(off_last_called_at: str) -> float:
@@ -389,6 +397,185 @@ def _poll_iteration(db: sqlite3.Connection) -> bool:
 
         if rowcount == 0:
             logger.info(f"Session {session_id} discarded mid-resolution for {barcode}")
+        return True
+
+    return _poll3(db)
+
+
+def _attempt_price(
+    barcode: str,
+    retailer_id: int,
+    name: str | None,
+    brand: str | None,
+    product_quantity: str | None,
+) -> None:
+    """Session-less price attempt: query Sainsbury's and write the durable ``prices`` row only.
+
+    Shared by poll-3's OFF-retry→price chaining (3.1a), price retry (3.1b), and price refresh (3.1c).
+    Writes NO ``session_items`` stamp — the live poll-2 path owns that. Not paced (price calls never
+    are). A null/empty ``name`` means no Sainsbury's keyword can be built, so the scraper is skipped
+    entirely (mirrors the poll-2 null-name guard); the query builder would otherwise fire a
+    ``"None None ..."`` search.
+    """
+    if not name:
+        logger.info(f"Barcode {barcode}: no name to build a Sainsbury's keyword — price skipped")
+        return
+
+    try:
+        price = sainsburys.get_price(
+            barcode=barcode,
+            name=name,
+            brand=brand,
+            product_quantity=product_quantity,
+        )
+    except Exception as e:
+        logger.warning(f"Barcode {barcode}: Sainsbury's error — {e}")
+        price = None
+
+    conn = get_connection()
+    try:
+        now = datetime.now(UTC).isoformat(timespec='seconds')
+        conn.execute("BEGIN IMMEDIATE")
+        _upsert_price_durable(conn, barcode, retailer_id, price, now)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _write_off_retry(barcode: str, retailer_id: int, result: dict | None) -> None:
+    """Write an OFF-retry outcome: durable ``product_variants`` row + OFF timestamp, one txn.
+
+    No ``session_items`` stamp (this path has no session context). ``result`` is the OFF dict on
+    success or ``None`` on failure — the caller has already collapsed a not-found / name-less response
+    into ``None`` (§3.1a). Stamping ``worker_state.off_last_called_at`` here keeps ``_pace_off_call``
+    correct on the next OFF call. Both timestamps derive from one ``now`` so they cannot straddle a
+    second boundary.
+    """
+    conn = get_connection()
+    try:
+        now_dt = datetime.now(UTC)
+        conn.execute("BEGIN IMMEDIATE")
+        _upsert_variant_durable(conn, barcode, retailer_id, result, now_dt.isoformat(timespec='seconds'))
+        conn.execute(
+            "UPDATE worker_state SET off_last_called_at = ? WHERE id = 1",
+            (now_dt.isoformat(),),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _poll3(db: sqlite3.Connection) -> bool:
+    """Poll 3 — the strictly-lowest-priority background retry/refresh path.
+
+    Reached only when poll 1 and poll 2 both found no live work. Processes AT MOST ONE unit of work
+    per call, in a fixed, testable category order — OFF retries, then price retries, then price
+    refreshes; oldest-due first within a category — then returns so the loop re-checks live work on
+    the next tick. Never reads or writes ``session_items`` / the confirm gate.
+
+    Staleness boundaries are computed in Python and passed as bound parameters. All durable timestamps
+    are UTC ``+00:00`` at 1-second resolution, so a lexical ``<=`` comparison against a UTC boundary is
+    chronologically correct. A ``NULL`` ``last_lookup_datetime`` (backfilled row) is maximally stale:
+    the ``IS NULL`` clause selects it, and ``ORDER BY last_lookup_datetime ASC`` sorts it first.
+    """
+    now = datetime.now(UTC)
+
+    # (a) OFF retry — failed OFF rows only; pending/resolved are never selected here.
+    off_boundary = (now - OFF_RETRY_INTERVAL).isoformat(timespec='seconds')
+    off_row = db.execute(
+        "SELECT barcode, retailer_id FROM product_variants "
+        "WHERE lookup_status = 'failed' AND lookup_failure_count < ? "
+        "  AND (last_lookup_datetime IS NULL OR last_lookup_datetime <= ?) "
+        "ORDER BY last_lookup_datetime ASC LIMIT 1",
+        (LOOKUP_FAILURE_CAP, off_boundary),
+    ).fetchone()
+
+    if off_row:
+        barcode = off_row['barcode']
+        retailer_id = off_row['retailer_id']
+
+        _pace_off_call(db)
+        try:
+            result = off.lookup_barcode(barcode)
+        except Exception as e:
+            logger.warning(f"Barcode {barcode}: OFF retry network error — {e}")
+            result = None
+
+        # Collapse "not found" and "found but nameless" into a single failure value. This one value
+        # drives BOTH the durable write and the chaining gate below — a name-less dict must never be
+        # written as 'resolved' nor chain to a price attempt.
+        if result is None or result.get('name') is None:
+            result = None
+
+        if result is None:
+            logger.info(f"Barcode {barcode}: OFF retry failed (retailer {retailer_id})")
+        else:
+            logger.info(f"Barcode {barcode}: OFF retry resolved (retailer {retailer_id})")
+
+        _write_off_retry(barcode, retailer_id, result)
+
+        # OFF-retry → price chaining: only when OFF now resolved AND the price was never attempted
+        # (no prices row at all). A prices row that exists but failed is owned by the price-retry path
+        # (b), not re-attempted here.
+        if result is not None:
+            has_price = db.execute(
+                "SELECT 1 FROM prices WHERE barcode = ? AND retailer_id = ?",
+                (barcode, retailer_id),
+            ).fetchone()
+            if has_price is None:
+                logger.info(f"Barcode {barcode}: chaining initial price attempt after OFF retry")
+                _attempt_price(
+                    barcode, retailer_id,
+                    result['name'], result['brand'], result['product_quantity'],
+                )
+        return True
+
+    # (b) Price retry — failed prices whose variant has a usable name.
+    price_boundary = (now - PRICE_RETRY_INTERVAL).isoformat(timespec='seconds')
+    retry_row = db.execute(
+        "SELECT p.barcode, p.retailer_id, pv.name, pv.brand, pv.product_quantity "
+        "FROM prices p "
+        "JOIN product_variants pv ON pv.barcode = p.barcode AND pv.retailer_id = p.retailer_id "
+        "WHERE p.lookup_status = 'failed' AND p.lookup_failure_count < ? "
+        "  AND (p.last_lookup_datetime IS NULL OR p.last_lookup_datetime <= ?) "
+        "  AND pv.name IS NOT NULL "
+        "ORDER BY p.last_lookup_datetime ASC LIMIT 1",
+        (LOOKUP_FAILURE_CAP, price_boundary),
+    ).fetchone()
+
+    if retry_row:
+        logger.info(f"Barcode {retry_row['barcode']}: price retry (retailer {retry_row['retailer_id']})")
+        _attempt_price(
+            retry_row['barcode'], retry_row['retailer_id'],
+            retry_row['name'], retry_row['brand'], retry_row['product_quantity'],
+        )
+        return True
+
+    # (c) Price refresh — resolved prices, for inflation. per_kg rows keep their stored £/kg (skipped).
+    refresh_boundary = (now - PRICE_REFRESH_INTERVAL).isoformat(timespec='seconds')
+    refresh_row = db.execute(
+        "SELECT p.barcode, p.retailer_id, pv.name, pv.brand, pv.product_quantity "
+        "FROM prices p "
+        "JOIN product_variants pv ON pv.barcode = p.barcode AND pv.retailer_id = p.retailer_id "
+        "WHERE p.lookup_status = 'resolved' AND p.price_type != 'per_kg' "
+        "  AND (p.last_lookup_datetime IS NULL OR p.last_lookup_datetime <= ?) "
+        "  AND pv.name IS NOT NULL "
+        "ORDER BY p.last_lookup_datetime ASC LIMIT 1",
+        (refresh_boundary,),
+    ).fetchone()
+
+    if refresh_row:
+        logger.info(f"Barcode {refresh_row['barcode']}: price refresh (retailer {refresh_row['retailer_id']})")
+        _attempt_price(
+            refresh_row['barcode'], refresh_row['retailer_id'],
+            refresh_row['name'], refresh_row['brand'], refresh_row['product_quantity'],
+        )
         return True
 
     return False
