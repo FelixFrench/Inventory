@@ -10,7 +10,10 @@ const assert = require('node:assert');
 globalThis.window = { location: { search: '', origin: 'https://app.example', host: 'app.example' } };
 globalThis.rowKey = require('./shared-utils.js').rowKey;
 
-const { refreshEventMatches, decideRefreshAction, mergeRefreshFields } = require('./product.js');
+const {
+    refreshEventMatches, decideRefreshAction, mergeRefreshFields,
+    findSessionDelta, sessionEventMatches, sessionBannerText,
+} = require('./product.js');
 
 // --- refreshEventMatches -----------------------------------------------------
 
@@ -118,4 +121,64 @@ test('mergeRefreshFields: does not mutate the passed-in current object', () => {
     const current = { name: 'Old' };
     mergeRefreshFields(current, RESOLVED_EVENT);
     assert.strictEqual(current.name, 'Old');
+});
+
+// --- findSessionDelta -----------------------------------------------------
+
+test('findSessionDelta: no active session -> 0', () => {
+    assert.strictEqual(findSessionDelta(null, '5014788110140', '1'), 0);
+});
+
+test('findSessionDelta: active session, variant not yet scanned -> 0', () => {
+    const session = { type: 'out', items: [{ barcode: '0000000000000', retailer: 1, delta: 3 }] };
+    assert.strictEqual(findSessionDelta(session, '5014788110140', '1'), 0);
+});
+
+test('findSessionDelta: active session, variant present -> its delta, coercing string vs int', () => {
+    const session = { type: 'out', items: [{ barcode: '5014788110140', retailer: 1, delta: 3 }] };
+    assert.strictEqual(findSessionDelta(session, '5014788110140', '1'), 3);
+});
+
+// --- sessionEventMatches --------------------------------------------------
+
+test('sessionEventMatches: matches an in-session scan for this variant', () => {
+    const msg = { type: 'scan', barcode: '5014788110140', retailer: 1, in_session: true, session_delta: 2 };
+    assert.strictEqual(sessionEventMatches(msg, '5014788110140', '1'), true);
+});
+
+test('sessionEventMatches: rejects a sessionless scan (no session_delta)', () => {
+    const msg = { type: 'scan', barcode: '5014788110140', retailer: 1, in_session: false };
+    assert.strictEqual(sessionEventMatches(msg, '5014788110140', '1'), false);
+});
+
+test('sessionEventMatches: matches a delta_update for this variant', () => {
+    const msg = { type: 'delta_update', barcode: '5014788110140', retailer: 1, session_delta: 0 };
+    assert.strictEqual(sessionEventMatches(msg, '5014788110140', '1'), true);
+});
+
+test('sessionEventMatches: matches a resolution carrying session_delta', () => {
+    const msg = { type: 'resolution', barcode: '5014788110140', retailer: 1, session_delta: 4 };
+    assert.strictEqual(sessionEventMatches(msg, '5014788110140', '1'), true);
+});
+
+test('sessionEventMatches: rejects a different barcode', () => {
+    const msg = { type: 'delta_update', barcode: '0000000000000', retailer: 1, session_delta: 1 };
+    assert.strictEqual(sessionEventMatches(msg, '5014788110140', '1'), false);
+});
+
+test('sessionEventMatches: rejects a different retailer', () => {
+    const msg = { type: 'delta_update', barcode: '5014788110140', retailer: 2, session_delta: 1 };
+    assert.strictEqual(sessionEventMatches(msg, '5014788110140', '1'), false);
+});
+
+test('sessionEventMatches: rejects an unrelated type (refresh)', () => {
+    const msg = { type: 'refresh', barcode: '5014788110140', retailer: 1 };
+    assert.strictEqual(sessionEventMatches(msg, '5014788110140', '1'), false);
+});
+
+// --- sessionBannerText -----------------------------------------------------
+
+test('sessionBannerText: formats "N in current session (in|out)"', () => {
+    assert.strictEqual(sessionBannerText(3, 'out'), '3 in current session (out)');
+    assert.strictEqual(sessionBannerText(0, 'in'), '0 in current session (in)');
 });

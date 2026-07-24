@@ -1,5 +1,14 @@
 /* Product-info page. Shared layout/typography/toasts come from base.css. */
 
+/* Session banner: colour-keyed to session type, reusing feed.css's exact in/out palette.
+   Sits below the nav in normal flow (not position: fixed — see feed's own banner precedent). */
+.session-banner { display: flex; align-items: center; justify-content: space-between; padding: 10px 20px; font-size: 0.95rem; font-weight: 600; gap: 12px; }
+.session-banner-in  { background: #E4F3E4; color: #2A5E2A; }
+.session-banner-out { background: #FAECE7; color: #993C1D; }
+.session-banner-controls { display: flex; gap: 8px; flex-shrink: 0; }
+/* currentColor picks up the banner's in/out text colour, so no per-type button rules needed. */
+.session-btn { width: 36px; height: 36px; border-radius: 50%; border: 1px solid currentColor; background: #fff; color: inherit; font-size: 1.1rem; font-weight: 700; cursor: pointer; }
+
 /* Product name + Refresh control on one row; the button stays right-aligned and wraps below on
    narrow screens (mobile-first). */
 .detail-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
