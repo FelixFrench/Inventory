@@ -43,6 +43,10 @@ CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN 
 CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL, delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
 CREATE INDEX idx_session_items_info_pending ON session_items(first_scanned_at) WHERE info_status = 'pending';
 CREATE INDEX idx_session_items_price_pending ON session_items(first_scanned_at) WHERE price_status = 'pending';
+CREATE TABLE inventory (
+    barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id),
+    quantity INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
 CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, minimum_quantity INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE group_variant_members (group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, PRIMARY KEY (group_id, barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id) ON DELETE CASCADE);
@@ -129,6 +133,15 @@ def _seed_price(conn, *, barcode=_BARCODE, retailer_id=_RETAILER_ID, price_pence
     conn.commit()
 
 
+def _seed_inventory(conn, *, barcode=_BARCODE, retailer_id=_RETAILER_ID, quantity=1):
+    conn.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
+    conn.execute(
+        "INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, ?)",
+        (barcode, retailer_id, quantity),
+    )
+    conn.commit()
+
+
 def _seed_session_item(conn, *, barcode=_BARCODE, retailer_id=_RETAILER_ID, session_id=_SESSION_ID,
                        info_status='pending', price_status='pending'):
     conn.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
@@ -172,6 +185,7 @@ def _poll3_env(db, *, off_result=None, price_result=None, now=_NOW):
 
 def test_off_retry_selects_failed_due(db):
     _seed_variant(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db)
     with _poll3_env(db, off_result=_GOOD_OFF, price_result=_GOOD_PRICE) as m:
         did = _poll3(db)
 
@@ -185,6 +199,7 @@ def test_off_retry_selects_failed_due(db):
 
 def test_off_retry_null_datetime_due(db):
     _seed_variant(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=None)
+    _seed_inventory(db)
     with _poll3_env(db, off_result=_GOOD_OFF, price_result=_GOOD_PRICE) as m:
         did = _poll3(db)
 
@@ -196,6 +211,7 @@ def test_off_retry_not_due_excluded(db):
     # Recently stamped (well inside 24h) -> not due. Pins the boundary direction: an inverted
     # comparison would select this and the test would fail.
     _seed_variant(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_NOT_DUE_24H)
+    _seed_inventory(db)  # in stock, so exclusion here is purely the not-due boundary
     with _poll3_env(db, off_result=_GOOD_OFF) as m:
         did = _poll3(db)
 
@@ -205,6 +221,7 @@ def test_off_retry_not_due_excluded(db):
 
 def test_off_resolved_never_reselected(db):
     _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db)  # in stock, so exclusion here is purely the resolved-status guard
     with _poll3_env(db, off_result=_GOOD_OFF) as m:
         did = _poll3(db)
 
@@ -214,6 +231,7 @@ def test_off_resolved_never_reselected(db):
 
 def test_off_pending_not_selected(db):
     _seed_variant(db, lookup_status='pending', last_lookup_datetime=None)
+    _seed_inventory(db)  # in stock, so exclusion here is purely the pending-status guard
     with _poll3_env(db, off_result=_GOOD_OFF) as m:
         did = _poll3(db)
 
@@ -224,6 +242,7 @@ def test_off_pending_not_selected(db):
 def test_off_retry_cap_excludes_at_cap(db):
     _seed_variant(db, lookup_status='failed', lookup_failure_count=LOOKUP_FAILURE_CAP,
                   last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db)  # in stock, so exclusion here is purely the failure-cap boundary
     with _poll3_env(db, off_result=_GOOD_OFF) as m:
         did = _poll3(db)
 
@@ -235,6 +254,7 @@ def test_off_retry_cap_edge_below_selected(db):
     # count == CAP - 1 must still be eligible (pins the `< cap` edge).
     _seed_variant(db, lookup_status='failed', lookup_failure_count=LOOKUP_FAILURE_CAP - 1,
                   last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db)
     with _poll3_env(db, off_result=_GOOD_OFF, price_result=_GOOD_PRICE) as m:
         did = _poll3(db)
 
@@ -248,6 +268,7 @@ def test_off_retry_cap_edge_below_selected(db):
 
 def test_off_retry_success_writes_durable_no_session(db):
     _seed_variant(db, lookup_status='failed', lookup_failure_count=3, last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db)
     _seed_session_item(db, info_status='pending', price_status='pending')  # must stay untouched
 
     with _poll3_env(db, off_result=_GOOD_OFF, price_result=_GOOD_PRICE):
@@ -272,6 +293,8 @@ def test_off_retry_success_writes_durable_no_session(db):
 def test_off_retry_failure_preserves_and_counts(db):
     # A previously-cached failed row (has name/brand/qty + a user minimum). A failed retry must keep
     # all of that, stay 'failed', and increment the count.
+    # minimum_quantity=4 also incidentally satisfies the 3d stock gate (no separate _seed_inventory
+    # needed) — this test's own subject is failure-preservation, not the gate.
     _seed_variant(db, name="Old Beans", brand="Heinz", product_quantity="415g", minimum_quantity=4,
                   lookup_status='failed', lookup_failure_count=2, last_lookup_datetime=_DUE_24H)
 
@@ -295,6 +318,7 @@ def test_off_retry_nameless_result_is_failure(db):
     # OFF returns a dict with a null name: must collapse to failure (not written 'resolved') and must
     # not chain a price attempt.
     _seed_variant(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db)
     with _poll3_env(db, off_result={"name": None, "brand": None, "product_quantity": None}) as m:
         _poll3(db)
 
@@ -309,6 +333,7 @@ def test_off_retry_nameless_result_is_failure(db):
 def test_off_retry_is_paced(db):
     # _pace_off_call must run before the OFF network call.
     _seed_variant(db, lookup_status='failed', lookup_failure_count=0, last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db)
     order = []
     with patch("src.worker.main.get_connection", _make_get_connection(db)), \
          patch("src.worker.main.datetime") as mock_dt, \
@@ -326,6 +351,7 @@ def test_off_retry_is_paced(db):
 def test_off_retry_price_chaining(db):
     # OFF resolves and there is NO prices row -> chain an initial price attempt in the same iteration.
     _seed_variant(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db)
     with _poll3_env(db, off_result=_GOOD_OFF, price_result=_GOOD_PRICE) as m:
         _poll3(db)
 
@@ -343,6 +369,7 @@ def test_off_retry_success_does_not_chain_when_price_row_exists(db):
     # A prices row already exists (failed). It is owned by the price-retry path (b); the OFF retry must
     # NOT re-attempt the price in this iteration.
     _seed_variant(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db)
     _seed_price(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_NOW_ISO)
 
     with _poll3_env(db, off_result=_GOOD_OFF, price_result=_GOOD_PRICE) as m:
@@ -358,6 +385,7 @@ def test_off_retry_success_does_not_chain_when_price_row_exists(db):
 def test_price_retry_selects_failed_due(db):
     _seed_variant(db, name="Baked Beans", brand="Heinz", product_quantity="415g",
                   lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)
     _seed_price(db, price_pence=None, lookup_status='failed', lookup_failure_count=1,
                 last_lookup_datetime=_DUE_24H)
 
@@ -372,6 +400,7 @@ def test_price_retry_selects_failed_due(db):
 
 def test_price_retry_null_datetime_due(db):
     _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)
     _seed_price(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=None)
 
     with _poll3_env(db, price_result=_GOOD_PRICE) as m:
@@ -383,6 +412,7 @@ def test_price_retry_null_datetime_due(db):
 
 def test_price_retry_not_due_excluded(db):
     _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)  # in stock, so exclusion here is purely the not-due boundary
     _seed_price(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_NOT_DUE_24H)
 
     with _poll3_env(db, price_result=_GOOD_PRICE) as m:
@@ -394,6 +424,7 @@ def test_price_retry_not_due_excluded(db):
 
 def test_price_retry_cap_excludes_at_cap(db):
     _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)  # in stock, so exclusion here is purely the failure-cap boundary
     _seed_price(db, lookup_status='failed', lookup_failure_count=LOOKUP_FAILURE_CAP,
                 last_lookup_datetime=_DUE_24H)
 
@@ -406,6 +437,7 @@ def test_price_retry_cap_excludes_at_cap(db):
 
 def test_price_retry_cap_edge_below_selected(db):
     _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)
     _seed_price(db, lookup_status='failed', lookup_failure_count=LOOKUP_FAILURE_CAP - 1,
                 last_lookup_datetime=_DUE_24H)
 
@@ -418,6 +450,7 @@ def test_price_retry_cap_edge_below_selected(db):
 
 def test_price_retry_not_paced(db):
     _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)
     _seed_price(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_DUE_24H)
 
     with _poll3_env(db, price_result=_GOOD_PRICE) as m:
@@ -429,6 +462,7 @@ def test_price_retry_not_paced(db):
 
 def test_price_failure_preserves_and_counts(db):
     _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)
     _seed_price(db, price_pence=85, price_type='unit', product_url='https://old',
                 lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_DUE_24H)
 
@@ -448,6 +482,7 @@ def test_price_failure_preserves_and_counts(db):
 
 def test_price_retry_success_resets_and_stamps(db):
     _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)
     _seed_price(db, price_pence=85, lookup_status='failed', lookup_failure_count=2,
                 last_lookup_datetime=_DUE_24H)
 
@@ -469,6 +504,7 @@ def test_price_retry_success_resets_and_stamps(db):
 
 def test_price_refresh_selects_resolved_due(db):
     _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)
     _seed_price(db, price_pence=85, price_type='unit', lookup_status='resolved',
                 lookup_failure_count=0, last_lookup_datetime=_DUE_30D)
 
@@ -481,6 +517,7 @@ def test_price_refresh_selects_resolved_due(db):
 
 def test_price_refresh_null_datetime_due(db):
     _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)
     _seed_price(db, price_pence=85, lookup_status='resolved', last_lookup_datetime=None)
 
     with _poll3_env(db, price_result=_GOOD_PRICE) as m:
@@ -492,6 +529,7 @@ def test_price_refresh_null_datetime_due(db):
 
 def test_price_refresh_not_due_excluded(db):
     _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)  # in stock, so exclusion here is purely the not-due boundary
     _seed_price(db, price_pence=85, lookup_status='resolved', last_lookup_datetime=_NOT_DUE_30D)
 
     with _poll3_env(db, price_result=_GOOD_PRICE) as m:
@@ -503,7 +541,80 @@ def test_price_refresh_not_due_excluded(db):
 
 def test_price_refresh_skips_per_kg(db):
     _seed_variant(db, name="Loose Bananas", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)  # in stock, so exclusion here is purely the per_kg guard
     _seed_price(db, price_pence=120, price_type='per_kg', lookup_status='resolved',
+                last_lookup_datetime=_DUE_30D)
+
+    with _poll3_env(db, price_result=_GOOD_PRICE) as m:
+        did = _poll3(db)
+
+    assert did is False
+    m.price.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Stock gate (3d) — out-of-stock, no-minimum variants are excluded from all three paths;
+# low-stock-with-minimum and present-but-zero-quantity are pinned explicitly.
+# ---------------------------------------------------------------------------
+
+def test_off_retry_excluded_no_inventory_row(db):
+    # Otherwise-eligible (failed/due/under-cap), but no inventory row at all and no minimum override.
+    _seed_variant(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_DUE_24H)
+    with _poll3_env(db, off_result=_GOOD_OFF) as m:
+        did = _poll3(db)
+
+    assert did is False
+    m.off.assert_not_called()
+
+
+def test_price_retry_excluded_no_inventory_row(db):
+    # Otherwise-eligible (failed/due/under-cap), but no inventory row at all and no minimum override.
+    _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_price(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_DUE_24H)
+
+    with _poll3_env(db, price_result=_GOOD_PRICE) as m:
+        did = _poll3(db)
+
+    assert did is False
+    m.price.assert_not_called()
+
+
+def test_price_refresh_excluded_no_inventory_row(db):
+    # Otherwise-eligible (resolved/due/non-per_kg), but no inventory row at all and no minimum override.
+    _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_price(db, price_pence=85, price_type='unit', lookup_status='resolved',
+                last_lookup_datetime=_DUE_30D)
+
+    with _poll3_env(db, price_result=_GOOD_PRICE) as m:
+        did = _poll3(db)
+
+    assert did is False
+    m.price.assert_not_called()
+
+
+def test_price_refresh_selects_low_stock_with_minimum(db):
+    # Zero stock but a user-set minimum keeps the variant eligible (low-stock shopping-list case).
+    _seed_variant(db, name="Baked Beans", minimum_quantity=2, lookup_status='resolved',
+                  last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db, quantity=0)
+    _seed_price(db, price_pence=85, price_type='unit', lookup_status='resolved',
+                last_lookup_datetime=_DUE_30D)
+
+    with _poll3_env(db, price_result=_GOOD_PRICE) as m:
+        did = _poll3(db)
+
+    assert did is True
+    m.price.assert_called_once()
+
+
+def test_price_refresh_excluded_zero_quantity_present_no_minimum(db):
+    # Pins the `quantity > 0` boundary on its own terms: an inventory row IS present (not NULL via the
+    # LEFT JOIN), its quantity is exactly zero, and there is no minimum override. A `>= 0` slip would
+    # pass this row through and this test would catch it, whereas the "no inventory row" tests above
+    # only exercise the NULL arm and the low-stock test above only exercises quantity=1/minimum>0.
+    _seed_variant(db, name="Baked Beans", lookup_status='resolved', last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db, quantity=0)
+    _seed_price(db, price_pence=85, price_type='unit', lookup_status='resolved',
                 last_lookup_datetime=_DUE_30D)
 
     with _poll3_env(db, price_result=_GOOD_PRICE) as m:
@@ -522,6 +633,7 @@ def test_price_null_name_variant_not_selected(db):
     # call is issued.
     _seed_variant(db, name=None, lookup_status='failed', lookup_failure_count=1,
                   last_lookup_datetime=_NOW_ISO)
+    _seed_inventory(db)  # in stock, so exclusion here is purely the null-name guard
     _seed_price(db, lookup_status='failed', lookup_failure_count=1, last_lookup_datetime=_DUE_24H)
 
     with _poll3_env(db, price_result=_GOOD_PRICE) as m:
@@ -607,8 +719,10 @@ def test_poll3_one_unit_per_iteration(db):
     # Two OFF-retry-eligible rows; exactly one is processed per poll-3 call.
     _seed_variant(db, barcode=_BARCODE, lookup_status='failed', lookup_failure_count=1,
                   last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db, barcode=_BARCODE)
     _seed_variant(db, barcode=_BARCODE2, lookup_status='failed', lookup_failure_count=1,
                   last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db, barcode=_BARCODE2)
 
     with _poll3_env(db, off_result=_GOOD_OFF, price_result=_GOOD_PRICE) as m:
         did = _poll3(db)
@@ -623,6 +737,7 @@ def test_poll3_never_touches_session_items(db):
     _seed_session_item(db, barcode=_BARCODE, info_status='pending', price_status='pending')
     _seed_variant(db, barcode=_BARCODE2, lookup_status='failed', lookup_failure_count=1,
                   last_lookup_datetime=_DUE_24H)
+    _seed_inventory(db, barcode=_BARCODE2)
 
     with _poll3_env(db, off_result=_GOOD_OFF, price_result=_GOOD_PRICE):
         did = _poll3(db)

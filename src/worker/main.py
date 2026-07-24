@@ -566,13 +566,16 @@ def _poll3(db: sqlite3.Connection) -> bool:
     """
     now = datetime.now(UTC)
 
-    # (a) OFF retry — failed OFF rows only; pending/resolved are never selected here.
+    # (a) OFF retry — failed OFF rows only; pending/resolved are never selected here. Gated to
+    # in-stock-or-minimum variants (3d) — see the stock predicate note below.
     off_boundary = (now - OFF_RETRY_INTERVAL).isoformat(timespec='seconds')
     off_row = db.execute(
-        "SELECT barcode, retailer_id FROM product_variants "
-        "WHERE lookup_status = 'failed' AND lookup_failure_count < ? "
-        "  AND (last_lookup_datetime IS NULL OR last_lookup_datetime <= ?) "
-        "ORDER BY last_lookup_datetime ASC LIMIT 1",
+        "SELECT pv.barcode, pv.retailer_id FROM product_variants pv "
+        "LEFT JOIN inventory inv ON inv.barcode = pv.barcode AND inv.retailer_id = pv.retailer_id "
+        "WHERE pv.lookup_status = 'failed' AND pv.lookup_failure_count < ? "
+        "  AND (pv.last_lookup_datetime IS NULL OR pv.last_lookup_datetime <= ?) "
+        "  AND (inv.quantity > 0 OR pv.minimum_quantity > 0) "
+        "ORDER BY pv.last_lookup_datetime ASC LIMIT 1",
         (LOOKUP_FAILURE_CAP, off_boundary),
     ).fetchone()
 
@@ -616,15 +619,18 @@ def _poll3(db: sqlite3.Connection) -> bool:
                 )
         return True
 
-    # (b) Price retry — failed prices whose variant has a usable name.
+    # (b) Price retry — failed prices whose variant has a usable name. Gated to in-stock-or-minimum
+    # variants (3d) — see the stock predicate note above.
     price_boundary = (now - PRICE_RETRY_INTERVAL).isoformat(timespec='seconds')
     retry_row = db.execute(
         "SELECT p.barcode, p.retailer_id, pv.name, pv.brand, pv.product_quantity "
         "FROM prices p "
         "JOIN product_variants pv ON pv.barcode = p.barcode AND pv.retailer_id = p.retailer_id "
+        "LEFT JOIN inventory inv ON inv.barcode = pv.barcode AND inv.retailer_id = pv.retailer_id "
         "WHERE p.lookup_status = 'failed' AND p.lookup_failure_count < ? "
         "  AND (p.last_lookup_datetime IS NULL OR p.last_lookup_datetime <= ?) "
         "  AND pv.name IS NOT NULL "
+        "  AND (inv.quantity > 0 OR pv.minimum_quantity > 0) "
         "ORDER BY p.last_lookup_datetime ASC LIMIT 1",
         (LOOKUP_FAILURE_CAP, price_boundary),
     ).fetchone()
@@ -638,14 +644,17 @@ def _poll3(db: sqlite3.Connection) -> bool:
         return True
 
     # (c) Price refresh — resolved prices, for inflation. per_kg rows keep their stored £/kg (skipped).
+    # Gated to in-stock-or-minimum variants (3d) — see the stock predicate note above.
     refresh_boundary = (now - PRICE_REFRESH_INTERVAL).isoformat(timespec='seconds')
     refresh_row = db.execute(
         "SELECT p.barcode, p.retailer_id, pv.name, pv.brand, pv.product_quantity "
         "FROM prices p "
         "JOIN product_variants pv ON pv.barcode = p.barcode AND pv.retailer_id = p.retailer_id "
+        "LEFT JOIN inventory inv ON inv.barcode = pv.barcode AND inv.retailer_id = pv.retailer_id "
         "WHERE p.lookup_status = 'resolved' AND p.price_type != 'per_kg' "
         "  AND (p.last_lookup_datetime IS NULL OR p.last_lookup_datetime <= ?) "
         "  AND pv.name IS NOT NULL "
+        "  AND (inv.quantity > 0 OR pv.minimum_quantity > 0) "
         "ORDER BY p.last_lookup_datetime ASC LIMIT 1",
         (refresh_boundary,),
     ).fetchone()
