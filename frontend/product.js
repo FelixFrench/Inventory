@@ -19,6 +19,10 @@ let awaitingManualRefresh = false;
 let ws = null;
 const WS_RECONNECT_DELAY = 2000;
 
+// Session banner state. sessionType null = no active session (banner hidden).
+let sessionType = null;
+let sessionDelta = 0;
+
 function api(path, opts = {}) {
     return fetch(path, {
         ...opts,
@@ -203,7 +207,7 @@ async function refresh() {
     render(await resp.json());
 }
 
-// --- Manual refresh (3c) -----------------------------------------------------
+// --- Manual refresh -----------------------------------------------------
 // FastAPI never calls OFF: the POST only marks the variant; the single worker performs the paced
 // OFF + price refresh and writes the durable rows, and FastAPI's poll loop then broadcasts a
 // 'refresh' WS event that this page applies live.
@@ -314,11 +318,105 @@ function connectWS() {
         } catch (_) {
             return;
         }
-        // Only 'refresh' events concern this page; every other type (scan/resolution/delta_update)
-        // is silently ignored.
         if (msg && msg.type === 'refresh') handleRefreshMessage(msg);
+        else if (sessionEventMatches(msg, BARCODE, RETAILER_ID)) handleSessionEvent(msg);
     };
     ws.onclose = () => { setTimeout(connectWS, WS_RECONNECT_DELAY); };
+}
+
+// --- Session banner ------------------------------------------------------
+// A session-context banner + [+]/[−] controls, so a scan-session delta can be adjusted from the
+// product page directly (e.g. writing off stock already thrown away) without going via the feed.
+
+// Find this variant's current delta in a GET /session response's `session` (or null if none is
+// active). Pure — no DOM. Returns 0 for no session, or a session with no matching item yet.
+function findSessionDelta(session, barcode, retailerId) {
+    if (!session) return 0;
+    const item = (session.items || []).find(
+        it => rowKey(it.barcode, it.retailer) === rowKey(barcode, retailerId)
+    );
+    return item ? item.delta : 0;
+}
+
+// Does this WS message carry a session-delta update for the product currently on the page?
+// Covers 'scan' (in-session only — a sessionless scan has no session_delta), 'delta_update', and
+// 'resolution' (always session-item-backed server-side, so it always carries session_delta).
+function sessionEventMatches(msg, barcode, retailerId) {
+    if (!msg) return false;
+    if (msg.type !== 'scan' && msg.type !== 'delta_update' && msg.type !== 'resolution') return false;
+    if (msg.type === 'scan' && msg.in_session === false) return false;
+    if (msg.session_delta === undefined || msg.session_delta === null) return false;
+    return rowKey(msg.barcode, msg.retailer) === rowKey(barcode, retailerId);
+}
+
+// Exact banner text format: "N in current session (in|out)". Pure — no DOM.
+function sessionBannerText(delta, type) {
+    return `${delta} in current session (${type})`;
+}
+
+function renderSessionBanner() {
+    const banner = document.getElementById('session-banner');
+    banner.classList.toggle('hidden', sessionType === null);
+    banner.classList.toggle('session-banner-in', sessionType === 'in');
+    banner.classList.toggle('session-banner-out', sessionType === 'out');
+    document.getElementById('session-banner-text').textContent = sessionBannerText(sessionDelta, sessionType);
+}
+
+function applySessionSnapshot(session) {
+    sessionType = session ? session.type : null;
+    sessionDelta = findSessionDelta(session, BARCODE, RETAILER_ID);
+    renderSessionBanner();
+}
+
+async function loadSession() {
+    try {
+        const resp = await api('/session');
+        if (!resp.ok) return;
+        applySessionSnapshot((await resp.json()).session);
+    } catch (_) {
+        // Non-fatal: the banner just stays hidden.
+    }
+}
+
+function handleSessionEvent(msg) {
+    sessionDelta = msg.session_delta;
+    renderSessionBanner();
+}
+
+// [+]: uniform POST /scan every press (settled default — one code path, creates the session-item
+// row on the first press, sidesteps the override PUT's 404-on-absent-row). No optimistic update —
+// the displayed delta updates from the matching 'scan' WS event.
+async function requestSessionIncrement() {
+    try {
+        const resp = await api('/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ barcode: BARCODE }),
+        });
+        if (!resp.ok) throw new Error('Server error ' + resp.status);
+    } catch (_) {
+        showToast('Could not update session count', 'error');
+    }
+}
+
+// [−]: absolute PUT to max(0, current − 1); no-op at the floor. No optimistic update — the
+// displayed delta updates from the matching 'delta_update' WS event.
+async function requestSessionDecrement() {
+    if (sessionDelta <= 0) return;
+    const nextDelta = Math.max(0, sessionDelta - 1);
+    try {
+        const resp = await api(
+            `/session/items/${encodeURIComponent(BARCODE)}/${encodeURIComponent(RETAILER_ID)}`,
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ delta: nextDelta }),
+            }
+        );
+        if (!resp.ok) throw new Error('Server error ' + resp.status);
+    } catch (_) {
+        showToast('Could not update session count', 'error');
+    }
 }
 
 // --- Wiring (browser only; guarded so the module can be required in node --test) -----------------
@@ -331,6 +429,8 @@ if (typeof document !== 'undefined') {
     document.getElementById('min-save').addEventListener('click', saveMinimum);
     document.getElementById('add-group-btn').addEventListener('click', addToGroup);
     document.getElementById('refresh-btn').addEventListener('click', requestManualRefresh);
+    document.getElementById('session-plus-btn').addEventListener('click', requestSessionIncrement);
+    document.getElementById('session-minus-btn').addEventListener('click', requestSessionDecrement);
 
     (async function init() {
         if (!BARCODE) {
@@ -340,6 +440,7 @@ if (typeof document !== 'undefined') {
         try {
             await refresh();
             await loadGroups();
+            await loadSession();
             connectWS();
         } catch (_) {
             showError('Could not load product. Check connection.');
@@ -349,5 +450,8 @@ if (typeof document !== 'undefined') {
 
 // Exported for the Node test runner (`node --test frontend/product.test.js`); ignored in the browser.
 if (typeof module !== 'undefined') {
-    module.exports = { refreshEventMatches, decideRefreshAction, mergeRefreshFields };
+    module.exports = {
+        refreshEventMatches, decideRefreshAction, mergeRefreshFields,
+        findSessionDelta, sessionEventMatches, sessionBannerText,
+    };
 }
