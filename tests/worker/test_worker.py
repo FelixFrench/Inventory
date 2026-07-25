@@ -9,6 +9,8 @@ import pytest
 
 from src.worker.main import (
     OFF_RATE_LIMIT_SECS,
+    POLL1_SQL,
+    POLL2_SQL,
     _compute_startup_sleep,
     _pace_off_call,
     _phase1_failure,
@@ -791,20 +793,13 @@ def test_poll1_info_pending_is_processed_first(db):
 def test_poll_queries_still_use_partial_indexes(db):
     # The re-key (adding retailer_id to the projection/WHERE) must not disqualify the two partial
     # indexes backing the polls. Confirm via EXPLAIN QUERY PLAN.
-    poll1_plan = db.execute(
-        "EXPLAIN QUERY PLAN SELECT barcode, session_id, retailer_id FROM session_items "
-        "WHERE info_status = 'pending' ORDER BY first_scanned_at ASC LIMIT 1"
-    ).fetchall()
+    #
+    # The queries come from src.worker.main's module constants, so this pins the SQL the worker
+    # actually runs rather than a copy that could drift out of step with it.
+    poll1_plan = db.execute("EXPLAIN QUERY PLAN " + POLL1_SQL).fetchall()
     assert any("idx_session_items_info_pending" in row["detail"] for row in poll1_plan)
 
-    poll2_plan = db.execute(
-        "EXPLAIN QUERY PLAN "
-        "SELECT si.barcode, si.session_id, si.retailer_id, pv.name, pv.brand, pv.product_quantity "
-        "FROM session_items si "
-        "LEFT JOIN product_variants pv ON pv.barcode = si.barcode AND pv.retailer_id = si.retailer_id "
-        "WHERE si.info_status = 'resolved' AND si.price_status = 'pending' "
-        "ORDER BY si.first_scanned_at ASC LIMIT 1"
-    ).fetchall()
+    poll2_plan = db.execute("EXPLAIN QUERY PLAN " + POLL2_SQL).fetchall()
     assert any("idx_session_items_price_pending" in row["detail"] for row in poll2_plan)
 
 
