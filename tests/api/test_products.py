@@ -454,6 +454,19 @@ def test_product_remove_group_valid_nonmember_is_noop(client, db):
     assert resp.status_code == 200
 
 
+def test_product_remove_group_unknown_barcode_404(client, db):
+    """The barcode arm of the existence rule, mirroring the group arm above.
+
+    Only the EDGE is idempotent: an unknown barcode is a client mistake (404), in contrast
+    with the valid-but-non-member no-op directly above.
+    """
+    db.execute("INSERT INTO product_groups (id, name) VALUES (1, 'G')")
+    db.commit()
+    resp = client.delete("/products/99999999/1/groups/1")
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "barcode_not_found"}
+
+
 def test_product_add_group_membership_requires_auth(client_no_auth, db):
     db.executescript("""
         INSERT INTO barcodes VALUES ('5014788110140');
@@ -587,3 +600,43 @@ def test_refresh_makes_no_network_call(client, db):
          patch("src.worker.sainsburys.get_price", side_effect=AssertionError("price must not be called")):
         resp = client.post("/products/5014788110140/1/refresh")
     assert resp.status_code == 202
+
+
+def test_refresh_makes_no_outbound_http_at_the_transport_layer(client, db):
+    """The same invariant one level lower: no HTTP leaves the process at all.
+
+    The function-level patch above cannot see a raw requests call made inside the router, so
+    block the transport instead. Both worker clients go through requests (off.py / sainsburys.py
+    use requests.get), while starlette's TestClient is an httpx.Client — the two stacks are
+    disjoint, so this patch cannot intercept the test's own POST.
+    """
+    db.execute("INSERT INTO barcodes VALUES ('5014788110140')")
+    db.commit()
+    with patch(
+        "requests.adapters.HTTPAdapter.send",
+        side_effect=AssertionError("no outbound HTTP may leave the refresh endpoint"),
+    ):
+        resp = client.post("/products/5014788110140/1/refresh")
+
+    assert resp.status_code == 202
+    marker = db.execute(
+        "SELECT manual_refresh_requested FROM product_variants "
+        "WHERE barcode='5014788110140' AND retailer_id=1"
+    ).fetchone()[0]
+    assert marker == 1
+
+
+def test_transport_patch_would_actually_catch_a_requests_call():
+    """Negative control for the test above: prove the patch really blocks requests.get.
+
+    Without this, a patch target that silently stopped matching would leave the no-network
+    assertion passing vacuously.
+    """
+    import requests
+
+    with patch(
+        "requests.adapters.HTTPAdapter.send",
+        side_effect=AssertionError("blocked"),
+    ):
+        with pytest.raises(AssertionError, match="blocked"):
+            requests.get("https://world.openfoodfacts.org/api/v2/product/1.json", timeout=1)

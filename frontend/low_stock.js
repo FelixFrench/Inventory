@@ -80,7 +80,7 @@ function render(data) {
   el.classList.remove('hidden');
 }
 
-(async function init() {
+async function init() {
   try {
     const resp = await fetch('/reports/low-stock', { headers: { 'X-API-Key': API_KEY } });
     if (!resp.ok) throw new Error('Server error ' + resp.status);
@@ -91,11 +91,11 @@ function render(data) {
     err.textContent = 'Could not load low stock report. Check connection.';
     err.classList.remove('hidden');
   }
-})();
+}
 
 // showToast() lives in shared-utils.js (loaded before this script).
 
-document.getElementById('print-btn').addEventListener('click', async () => {
+async function onPrintClick() {
     const btn = document.getElementById('print-btn');
     const report = btn.dataset.report;
 
@@ -120,4 +120,17 @@ document.getElementById('print-btn').addEventListener('click', async () => {
     } finally {
         btn.disabled = false;
     }
-});
+}
+
+// Guarded so the module can be required by the Node test runner, where `document` is
+// undefined; in a browser the guard is always true and the load-time wiring is unchanged.
+if (typeof document !== 'undefined') {
+    init();
+    document.getElementById('print-btn').addEventListener('click', onPrintClick);
+}
+
+// Exported for the Node test runner (`node --test frontend/low_stock.test.js`); ignored in
+// the browser, where `module` is undefined and these are plain globals.
+if (typeof module !== 'undefined') {
+    module.exports = { groupsTable, productsTable };
+}

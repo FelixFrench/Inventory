@@ -482,4 +482,14 @@ async function init() {
     connectWS();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+// Guarded so the module can be required by the Node test runner, where `document` is
+// undefined; in a browser the guard is always true and the wiring is unchanged.
+if (typeof document !== 'undefined') {
+    document.addEventListener('DOMContentLoaded', init);
+}
+
+// Exported for the Node test runner (`node --test frontend/feed.test.js`); ignored in the
+// browser, where `module` is undefined and these are plain globals.
+if (typeof module !== 'undefined') {
+    module.exports = { overrideUrl, _statusMarkup, renderField, renderPrice };
+}

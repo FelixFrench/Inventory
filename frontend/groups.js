@@ -92,12 +92,23 @@ async function createGroup(e) {
     }
 }
 
-document.getElementById('create-form').addEventListener('submit', createGroup);
-
-(async function init() {
+async function init() {
     try {
         await refresh();
     } catch (_) {
         showError('Could not load groups. Check connection.');
     }
-})();
+}
+
+// Guarded so the module can be required by the Node test runner, where `document` is
+// undefined; in a browser the guard is always true and the load-time wiring is unchanged.
+if (typeof document !== 'undefined') {
+    document.getElementById('create-form').addEventListener('submit', createGroup);
+    init();
+}
+
+// Exported for the Node test runner (`node --test frontend/groups.test.js`); ignored in the
+// browser, where `module` is undefined and these are plain globals.
+if (typeof module !== 'undefined') {
+    module.exports = { groupsTable };
+}
