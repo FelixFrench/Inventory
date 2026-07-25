@@ -5,6 +5,12 @@ from pathlib import Path
 
 import pytest
 
+# Poll 1 / poll 2 selection SQL, imported from the worker so the EQP test below pins the literal
+# queries the worker runs against the production index DDL. They were previously copied here as
+# literals, which could drift out of step with the worker and silently stop pinning anything.
+from src.worker.main import POLL1_SQL as _POLL1_SQL
+from src.worker.main import POLL2_SQL as _POLL2_SQL
+
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
@@ -572,22 +578,6 @@ def test_rekey_partial_state_raises_runtime_error(half_applied):
 # ---------------------------------------------------------------------------
 # Partial indexes: presence after the FULL chain, and the worker polls using them
 # ---------------------------------------------------------------------------
-
-# Poll 1 / poll 2 selection SQL, mirroring src/worker/main.py:295-299 and :349-360. Kept as
-# literals here because the worker builds them inline; see the 4a ledger note on that drift risk.
-_POLL1_SQL = (
-    "SELECT barcode, session_id, retailer_id FROM session_items "
-    "WHERE info_status = 'pending' "
-    "ORDER BY first_scanned_at ASC LIMIT 1"
-)
-_POLL2_SQL = (
-    "SELECT si.barcode, si.session_id, si.retailer_id, pv.name, pv.brand, pv.product_quantity "
-    "FROM session_items si "
-    "LEFT JOIN product_variants pv ON pv.barcode = si.barcode AND pv.retailer_id = si.retailer_id "
-    "WHERE si.info_status = 'resolved' AND si.price_status = 'pending' "
-    "ORDER BY si.first_scanned_at ASC LIMIT 1"
-)
-
 
 def _head_migrated_db():
     """Create a fresh temp DB migrated all the way to head; return its path."""

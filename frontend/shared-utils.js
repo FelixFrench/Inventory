@@ -64,8 +64,8 @@ function rowKey(barcode, retailer) {
     return String(barcode) + ':' + String(retailer);
 }
 
-// Exported for the Node test runner (`node --test frontend/`); ignored in the
-// browser, where `module` is undefined and these are plain globals.
+// Exported for the Node test runner (`node --test frontend/shared-utils.test.js`); ignored in
+// the browser, where `module` is undefined and these are plain globals.
 if (typeof module !== 'undefined') {
     module.exports = { esc, sanitiseHref, showToast, rowKey };
 }

@@ -26,6 +26,26 @@ PRICE_RETRY_INTERVAL = timedelta(hours=24)
 PRICE_REFRESH_INTERVAL = timedelta(days=30)
 LOOKUP_FAILURE_CAP = 5
 
+# The two live-scan poll queries, as module constants so the EXPLAIN-QUERY-PLAN tests can assert
+# against the literal SQL this worker runs rather than their own copy of it (they previously
+# embedded duplicates, which could drift silently and leave the partial indexes unpinned). Both
+# depend on the partial indexes idx_session_items_info_pending / idx_session_items_price_pending.
+POLL1_SQL = (
+    "SELECT barcode, session_id, retailer_id FROM session_items "
+    "WHERE info_status = 'pending' "
+    "ORDER BY first_scanned_at ASC LIMIT 1"
+)
+POLL2_SQL = """
+        SELECT si.barcode, si.session_id, si.retailer_id, pv.name, pv.brand, pv.product_quantity
+        FROM   session_items si
+        LEFT   JOIN product_variants pv
+               ON pv.barcode = si.barcode AND pv.retailer_id = si.retailer_id
+        WHERE  si.info_status = 'resolved'
+          AND  si.price_status = 'pending'
+        ORDER  BY si.first_scanned_at ASC
+        LIMIT  1
+        """
+
 
 def _compute_startup_sleep(off_last_called_at: str) -> float:
     last_called = datetime.fromisoformat(off_last_called_at)
@@ -292,11 +312,7 @@ def _poll_iteration(db: sqlite3.Connection) -> bool:
     error or a rollback trigger.
     """
     # Poll 1: info pending
-    poll1 = db.execute(
-        "SELECT barcode, session_id, retailer_id FROM session_items "
-        "WHERE info_status = 'pending' "
-        "ORDER BY first_scanned_at ASC LIMIT 1"
-    ).fetchone()
+    poll1 = db.execute(POLL1_SQL).fetchone()
 
     if poll1:
         barcode = poll1['barcode']
@@ -346,18 +362,7 @@ def _poll_iteration(db: sqlite3.Connection) -> bool:
         return True
 
     # Poll 2: price pending (only when Poll 1 found nothing)
-    poll2 = db.execute(
-        """
-        SELECT si.barcode, si.session_id, si.retailer_id, pv.name, pv.brand, pv.product_quantity
-        FROM   session_items si
-        LEFT   JOIN product_variants pv
-               ON pv.barcode = si.barcode AND pv.retailer_id = si.retailer_id
-        WHERE  si.info_status = 'resolved'
-          AND  si.price_status = 'pending'
-        ORDER  BY si.first_scanned_at ASC
-        LIMIT  1
-        """
-    ).fetchone()
+    poll2 = db.execute(POLL2_SQL).fetchone()
 
     if poll2:
         barcode = poll2['barcode']

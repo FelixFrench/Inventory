@@ -146,7 +146,10 @@ def get_product_detail(
     LEFT JOINs throughout so a null-data / unresolved variant still renders (null name/brand/
     quantity, no price row). An unknown retailer_id -> 404 retailer_not_found; a barcode absent
     from `barcodes` entirely -> 404 barcode_not_found. Returns raw nullable fields; the frontend
-    decides display text. No lookup-status field -- the durable status columns do not exist yet.
+    decides display text. No lookup-status field: the durable columns exist
+    (`product_variants.lookup_status`) but are deliberately not exposed here -- they are read only
+    by the refresh/retry worker. Exposing them so the product page can distinguish "OFF failed"
+    from "never looked up" is unclaimed follow-up work.
     """
     try:
         guard = _retailer_missing_response(db, retailer_id)
