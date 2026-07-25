@@ -490,6 +490,129 @@ def test_upsert_price_durable_writes_without_session_stamp(db):
 
 
 # ---------------------------------------------------------------------------
+# Durable writers: the FAILURE branches, exercised directly
+# ---------------------------------------------------------------------------
+# The _phase*/_poll3 tests reach these through a wrapper. Calling the helpers directly pins
+# R1 (preserve-on-conflict) to the writer itself, so a regression is attributed correctly and
+# stays covered even if a caller changes.
+
+_TS = "2026-07-21T12:00:00+00:00"
+
+
+def test_upsert_variant_durable_failure_preserves_every_cached_field(db):
+    """R1: an OFF failure onto an existing row must touch ONLY the three durable columns.
+
+    name/brand/product_quantity are cached OFF data and minimum_quantity is user-set — all four
+    are absent from the ON CONFLICT SET list and must survive.
+    """
+    _seed_variant(db, name="Baked Beans", brand="Heinz", product_quantity="415g",
+                  minimum_quantity=7, lookup_status='resolved', lookup_failure_count=2)
+    db.execute("BEGIN IMMEDIATE")
+    _upsert_variant_durable(db, _BARCODE, _RETAILER_ID, None, _TS)
+    db.commit()
+
+    pv = db.execute(
+        "SELECT name, brand, product_quantity, minimum_quantity, lookup_status, "
+        "lookup_failure_count, last_lookup_datetime FROM product_variants "
+        "WHERE barcode = ? AND retailer_id = ?", (_BARCODE, _RETAILER_ID)
+    ).fetchone()
+    assert pv["name"] == "Baked Beans"
+    assert pv["brand"] == "Heinz"
+    assert pv["product_quantity"] == "415g"
+    assert pv["minimum_quantity"] == 7
+    assert pv["lookup_status"] == "failed"
+    assert pv["lookup_failure_count"] == 3          # incremented, not reset to 1
+    assert pv["last_lookup_datetime"] == _TS
+
+
+def test_upsert_variant_durable_failure_writes_a_row_when_none_exists(db):
+    """Always-write-a-row: a first-ever OFF failure still leaves a null-data variant row."""
+    db.execute("INSERT INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
+    db.commit()
+    db.execute("BEGIN IMMEDIATE")
+    _upsert_variant_durable(db, _BARCODE, _RETAILER_ID, None, _TS)
+    db.commit()
+
+    pv = db.execute(
+        "SELECT name, brand, product_quantity, minimum_quantity, lookup_status, "
+        "lookup_failure_count, last_lookup_datetime FROM product_variants "
+        "WHERE barcode = ? AND retailer_id = ?", (_BARCODE, _RETAILER_ID)
+    ).fetchone()
+    assert pv is not None
+    assert (pv["name"], pv["brand"], pv["product_quantity"]) == (None, None, None)
+    assert pv["minimum_quantity"] == 0
+    assert pv["lookup_status"] == "failed"
+    assert pv["lookup_failure_count"] == 1          # seeded at 1, not incremented from NULL
+    assert pv["last_lookup_datetime"] == _TS
+
+
+def test_upsert_price_durable_failure_preserves_existing_price_data(db):
+    """A price failure keeps the last known price/type/url; only durable columns move."""
+    _seed_variant(db, name="Baked Beans", lookup_status='resolved')
+    db.execute(
+        "INSERT INTO prices (barcode, retailer_id, price_pence, price_type, product_url, "
+        "lookup_status, lookup_failure_count) VALUES (?, ?, 85, 'per_kg', 'https://x', 'resolved', 1)",
+        (_BARCODE, _RETAILER_ID)
+    )
+    db.commit()
+
+    db.execute("BEGIN IMMEDIATE")
+    _upsert_price_durable(db, _BARCODE, _RETAILER_ID, None, _TS)
+    db.commit()
+
+    pr = db.execute(
+        "SELECT price_pence, price_type, product_url, lookup_status, lookup_failure_count, "
+        "last_lookup_datetime FROM prices WHERE barcode = ? AND retailer_id = ?",
+        (_BARCODE, _RETAILER_ID)
+    ).fetchone()
+    assert pr["price_pence"] == 85
+    assert pr["price_type"] == "per_kg"             # not clobbered back to the 'unit' default
+    assert pr["product_url"] == "https://x"
+    assert pr["lookup_status"] == "failed"
+    assert pr["lookup_failure_count"] == 2
+    assert pr["last_lookup_datetime"] == _TS
+
+
+def test_upsert_price_durable_failure_writes_a_row_when_none_exists(db):
+    """Always-write-a-row: a never-priced variant gets a failed row at the 'unit' default."""
+    _seed_variant(db, name="Baked Beans", lookup_status='resolved')
+    db.execute("BEGIN IMMEDIATE")
+    _upsert_price_durable(db, _BARCODE, _RETAILER_ID, None, _TS)
+    db.commit()
+
+    pr = db.execute(
+        "SELECT price_pence, price_type, product_url, lookup_status, lookup_failure_count "
+        "FROM prices WHERE barcode = ? AND retailer_id = ?", (_BARCODE, _RETAILER_ID)
+    ).fetchone()
+    assert pr is not None
+    assert pr["price_pence"] is None
+    assert pr["price_type"] == "unit"
+    assert pr["product_url"] is None
+    assert pr["lookup_status"] == "failed"
+    assert pr["lookup_failure_count"] == 1
+
+
+def test_no_insert_or_replace_anywhere_in_src():
+    """INSERT OR REPLACE deletes-then-reinserts, which fires ON DELETE CASCADE on children.
+
+    product_variants is FK-referenced by prices and group_variant_members, so a single
+    INSERT OR REPLACE would silently drop a user's group memberships. Guard the whole tree.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).parents[2] / "src"
+    pattern = re.compile(r"INSERT\s+OR\s+REPLACE", re.IGNORECASE)
+    offenders = [
+        str(p.relative_to(src))
+        for p in src.rglob("*")
+        if p.is_file() and p.suffix in {".py", ".sql"}
+        and pattern.search(p.read_text(encoding="utf-8"))
+    ]
+    assert offenders == []
+
+
+# ---------------------------------------------------------------------------
 # Composite re-key: stamps key on (session_id, barcode, retailer_id)
 # ---------------------------------------------------------------------------
 

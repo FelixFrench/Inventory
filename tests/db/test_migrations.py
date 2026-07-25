@@ -510,6 +510,143 @@ def test_rekey_idempotent_second_run_is_noop():
         _safe_unlink(db_path)
 
 
+def _stamped_pre_rekey_db():
+    """Build a pre-1b DB stamped at 605be7ba628c and return (db_path, alembic_cfg)."""
+    import tempfile
+
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    conn = sqlite3.connect(db_path)
+    for stmt in [s.strip() for s in _PRE_REKEY_SCHEMA.split(";") if s.strip()]:
+        conn.execute(stmt)
+    _seed_pre_rekey(conn)
+    conn.close()
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    return db_path, alembic_cfg
+
+
+@pytest.mark.parametrize("half_applied", ["inventory", "session_items"])
+def test_rekey_partial_state_raises_runtime_error(half_applied):
+    """The third arm of the idempotency guard: exactly ONE table re-keyed must abort loudly.
+
+    Simulates a crash mid-rebuild by hand-adding retailer_id to one of the two tables. Both
+    directions are pinned so a swapped `inv_done != si_done` predicate cannot pass silently;
+    the both-applied no-op is covered by test_rekey_idempotent_second_run_is_noop.
+    """
+    from alembic import command
+
+    db_path, alembic_cfg = _stamped_pre_rekey_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            f"ALTER TABLE {half_applied} ADD COLUMN retailer_id INTEGER NOT NULL DEFAULT 1"
+        )
+        conn.commit()
+        conn.close()
+
+        command.stamp(alembic_cfg, _PREV_REV)
+        with pytest.raises(RuntimeError, match="partially applied"):
+            command.upgrade(alembic_cfg, _REKEY_REV)
+
+        # The guard must abort BEFORE touching anything: the other table is untouched and no
+        # scratch table was left behind.
+        other = "session_items" if half_applied == "inventory" else "inventory"
+        conn = sqlite3.connect(db_path)
+        assert "retailer_id" not in {
+            r[1] for r in conn.execute(f"PRAGMA table_info('{other}')").fetchall()
+        }
+        leftovers = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'new_%'"
+        ).fetchall()}
+        assert leftovers == set()
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+# ---------------------------------------------------------------------------
+# Partial indexes: presence after the FULL chain, and the worker polls using them
+# ---------------------------------------------------------------------------
+
+# Poll 1 / poll 2 selection SQL, mirroring src/worker/main.py:295-299 and :349-360. Kept as
+# literals here because the worker builds them inline; see the 4a ledger note on that drift risk.
+_POLL1_SQL = (
+    "SELECT barcode, session_id, retailer_id FROM session_items "
+    "WHERE info_status = 'pending' "
+    "ORDER BY first_scanned_at ASC LIMIT 1"
+)
+_POLL2_SQL = (
+    "SELECT si.barcode, si.session_id, si.retailer_id, pv.name, pv.brand, pv.product_quantity "
+    "FROM session_items si "
+    "LEFT JOIN product_variants pv ON pv.barcode = si.barcode AND pv.retailer_id = si.retailer_id "
+    "WHERE si.info_status = 'resolved' AND si.price_status = 'pending' "
+    "ORDER BY si.first_scanned_at ASC LIMIT 1"
+)
+
+
+def _head_migrated_db():
+    """Create a fresh temp DB migrated all the way to head; return its path."""
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(alembic_cfg, "head")
+    return db_path
+
+
+def test_partial_indexes_survive_the_full_migration_chain():
+    """Both partial indexes exist after `upgrade head`, not merely after the 1b revision.
+
+    test_rekey_upgrade_shapes_data_and_constraints pins them at 1b only, and every later
+    pre-schema hand-creates them inline — so a later migration dropping them would go unseen.
+    """
+    db_path = _head_migrated_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        info_sql = _partial_index_sql(conn, "idx_session_items_info_pending")
+        price_sql = _partial_index_sql(conn, "idx_session_items_price_pending")
+        assert info_sql is not None and "WHERE info_status = 'pending'" in info_sql
+        assert price_sql is not None and "WHERE price_status = 'pending'" in price_sql
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_poll_queries_use_partial_indexes_on_the_migrated_schema():
+    """EXPLAIN QUERY PLAN against the PRODUCTION index DDL (a head-migrated DB).
+
+    The sibling test in tests/worker/test_worker.py runs the same assertions against that
+    file's inline SCHEMA copy; this one proves the indexes the migrations actually create are
+    the ones the polls can use.
+    """
+    db_path = _head_migrated_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+
+        poll1_plan = conn.execute("EXPLAIN QUERY PLAN " + _POLL1_SQL).fetchall()
+        assert any("idx_session_items_info_pending" in r["detail"] for r in poll1_plan), \
+            [r["detail"] for r in poll1_plan]
+
+        poll2_plan = conn.execute("EXPLAIN QUERY PLAN " + _POLL2_SQL).fetchall()
+        assert any("idx_session_items_price_pending" in r["detail"] for r in poll2_plan), \
+            [r["detail"] for r in poll2_plan]
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
 # ---------------------------------------------------------------------------
 # 1c: move minimum_quantity from inventory to product_variants (revision 66c63d972d98)
 # ---------------------------------------------------------------------------

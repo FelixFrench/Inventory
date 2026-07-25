@@ -15,12 +15,14 @@ from src.api.dependencies import get_db, verify_api_key
 from src.api.groups import (
     GroupResolution,
     is_low_stock,
+    reachable_group_ids,
     resolve_all_groups,
     resolve_group,
     shortfall,
     would_create_cycle,
 )
 from src.api.main import app
+from src.api.routers.groups import ensure_variant_row, run_membership
 
 _RID = 1  # retailer id (Sainsbury's seed)
 
@@ -228,6 +230,53 @@ def test_resolver_terminates_on_injected_cycle(db):
     assert res is not None
     assert res.total_quantity == 3
     assert res.member_variants == [("b1", _RID)]
+
+
+# --- reachable_group_ids (the WITH RECURSIVE walk, exercised directly) ------------------
+# resolve_group covers it indirectly; these pin the walk itself, so a termination or
+# self-inclusion regression is attributed to the right function.
+
+def test_reachable_includes_the_root_even_with_no_edges(db):
+    _group(db, 1)
+    db.commit()
+    assert reachable_group_ids(db, 1) == {1}
+
+
+def test_reachable_walks_nested_children(db):
+    _group(db, 1)
+    _group(db, 2)
+    _group(db, 3)
+    _add_child(db, 1, 2)
+    _add_child(db, 2, 3)
+    db.commit()
+    assert reachable_group_ids(db, 1) == {1, 2, 3}
+    # Direction matters: the walk is parent -> child only.
+    assert reachable_group_ids(db, 3) == {3}
+
+
+def test_reachable_deduplicates_a_diamond(db):
+    # 1 -> 2, 1 -> 3, and both 2 and 3 -> 4. Node 4 is reachable by two paths.
+    for gid in (1, 2, 3, 4):
+        _group(db, gid)
+    _add_child(db, 1, 2)
+    _add_child(db, 1, 3)
+    _add_child(db, 2, 4)
+    _add_child(db, 3, 4)
+    db.commit()
+    assert reachable_group_ids(db, 1) == {1, 2, 3, 4}
+
+
+def test_reachable_terminates_on_an_injected_cycle(db):
+    # Cycles inserted directly, bypassing would_create_cycle: the path guard must stop the walk.
+    _group(db, 1)
+    _group(db, 2)
+    _group(db, 3)
+    _add_child(db, 1, 2)
+    _add_child(db, 2, 3)
+    _add_child(db, 3, 1)   # 1 -> 2 -> 3 -> 1
+    db.commit()
+    assert reachable_group_ids(db, 1) == {1, 2, 3}   # returns, does not hang
+    assert reachable_group_ids(db, 2) == {1, 2, 3}
 
 
 # --- cycle prevention ------------------------------------------------------------------
@@ -489,6 +538,18 @@ def test_remove_variant_valid_nonmember_noop(client, db):
     assert resp.status_code == 200
 
 
+def test_remove_variant_unknown_barcode_404(client, db):
+    """The membership existence rule's remaining arm: only the EDGE is idempotent.
+
+    A valid group + an unknown barcode is a client mistake (404), not a silent zero-row delete
+    — the contrast with test_remove_variant_valid_nonmember_noop above is the whole point.
+    """
+    gid = client.post("/groups", json={"name": "G"}).json()["id"]
+    resp = client.delete(f"/groups/{gid}/variants/99999999")
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "barcode_not_found"}
+
+
 # --- Membership: sub-groups ------------------------------------------------------------
 
 def test_add_subgroup(client, db):
@@ -638,6 +699,65 @@ def test_group_detail_null_variant_renders(client, db):
     v = resp.json()["variants"][0]
     assert v["barcode"] == "b1"
     assert v["name"] is None and v["brand"] is None
+
+
+# --- run_membership: the shared transactional wrapper ----------------------------------
+# The typed-error arms (404/404/409) are covered by the endpoint tests above. These pin the
+# unexpected-failure arms, where an un-rolled-back raise would leave a phantom variant row
+# behind and hold the writer lock open.
+
+def _failing_action(db, exc):
+    """An action that performs a REAL partial write, then fails."""
+    def action():
+        ensure_variant_row(db, "b1", _RID)
+        raise exc
+    return action
+
+
+def test_run_membership_rolls_back_a_partial_write_on_unexpected_error(db):
+    import json as _json
+
+    db.execute("INSERT INTO barcodes (barcode) VALUES ('b1')")
+    db.commit()
+
+    resp = run_membership(db, _failing_action(db, RuntimeError("boom")))
+
+    assert resp.status_code == 500
+    assert _json.loads(resp.body) == {"error": "internal_error"}
+    # The ensure_variant_row write is gone — rollback actually happened, not merely returned.
+    assert db.execute("SELECT 1 FROM product_variants WHERE barcode = 'b1'").fetchone() is None
+    # ...and the connection is immediately writable again (no lingering transaction/lock).
+    db.execute("INSERT INTO barcodes (barcode) VALUES ('b2')")
+    db.commit()
+    assert db.execute("SELECT COUNT(*) c FROM barcodes").fetchone()["c"] == 2
+
+
+def test_run_membership_rolls_back_and_raises_503_on_operational_error(db):
+    from fastapi import HTTPException
+
+    db.execute("INSERT INTO barcodes (barcode) VALUES ('b1')")
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        run_membership(db, _failing_action(db, sqlite3.OperationalError("database is locked")))
+
+    assert exc.value.status_code == 503
+    assert db.execute("SELECT 1 FROM product_variants WHERE barcode = 'b1'").fetchone() is None
+    db.execute("INSERT INTO barcodes (barcode) VALUES ('b2')")
+    db.commit()
+    assert db.execute("SELECT COUNT(*) c FROM barcodes").fetchone()["c"] == 2
+
+
+def test_run_membership_commits_on_success(db):
+    """The positive control: the wrapper must actually persist a successful action."""
+    db.execute("INSERT INTO barcodes (barcode) VALUES ('b1')")
+    db.commit()
+
+    result = run_membership(db, lambda: ensure_variant_row(db, "b1", _RID))
+
+    assert result == {"ok": True}
+    db.rollback()   # would discard the write if run_membership had not committed
+    assert db.execute("SELECT 1 FROM product_variants WHERE barcode = 'b1'").fetchone() is not None
 
 
 # --- Auth coverage ---------------------------------------------------------------------

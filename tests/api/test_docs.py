@@ -57,6 +57,14 @@ def test_openapi_json_200(client):
     assert "openapi" in data
 
 
+def test_openapi_version_comes_from_the_single_version_constant(client):
+    """1a: src/version.py feeds the FastAPI/OpenAPI version — not a second hardcoded literal."""
+    from src.version import __version__
+
+    data = client.get("/openapi.json").json()
+    assert data["info"]["version"] == __version__
+
+
 # ---------------------------------------------------------------------------
 # POST /docs-login
 # ---------------------------------------------------------------------------

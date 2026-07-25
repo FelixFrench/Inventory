@@ -40,6 +40,23 @@ def test_get_headers_caches_result():
     off_module._headers = None
 
 
+def test_get_headers_user_agent_carries_the_single_version_constant():
+    """1a: src/version.py is the single source feeding the OFF User-Agent.
+
+    OFF's usage policy requires an identifying UA; a hardcoded or drifted version here would
+    only be visible in outbound traffic, never in a response.
+    """
+    from src.version import __version__
+
+    off_module._headers = None
+    with patch("src.worker.off.load_dotenv"), \
+         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}, clear=True):
+        ua = _get_headers()["User-Agent"]
+    off_module._headers = None
+
+    assert ua == f"FFInventory/{__version__} (test@example.com)"
+
+
 # ---------------------------------------------------------------------------
 # lookup_barcode — product_quantity structured fields
 # ---------------------------------------------------------------------------

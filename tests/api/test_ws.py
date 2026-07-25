@@ -14,6 +14,7 @@ from src.api.routers.ws import (
     _status_to_wire,
     build_payload,
     build_refresh_notification,
+    build_scan_notification,
     manager,
 )
 
@@ -257,6 +258,43 @@ def test_poll_emits_after_restart():
     rows = [_make_row(_BARCODE, "resolved", "resolved")]
     payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
     assert len(payloads) == 1
+
+
+def test_poll_keys_are_composite_across_retailers():
+    """One barcode under two retailers must occupy two distinct last_seen slots.
+
+    Keyed on barcode alone, the second row would overwrite the first's entry within the same
+    call and the pair would be reported as a single, flickering product.
+    """
+    last_seen = {}
+    rows = [
+        _make_row(_BARCODE, "resolved", "resolved", retailer_id=1),
+        _make_row(_BARCODE, "pending", "pending", retailer_id=2),
+    ]
+    payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
+
+    assert len(payloads) == 2
+    assert last_seen == {
+        (_BARCODE, 1): ("resolved", "resolved"),
+        (_BARCODE, 2): ("pending", "pending"),
+    }
+
+
+def test_poll_change_on_one_retailer_does_not_silence_the_other():
+    """The negative half: retailer 2 moves, retailer 1 is unchanged -> exactly one payload."""
+    last_seen = {
+        (_BARCODE, 1): ("resolved", "resolved"),
+        (_BARCODE, 2): ("pending", "pending"),
+    }
+    rows = [
+        _make_row(_BARCODE, "resolved", "resolved", retailer_id=1),
+        _make_row(_BARCODE, "resolved", "pending", retailer_id=2),
+    ]
+    payloads = _compute_poll_updates(rows, last_seen, _RETAILER_ID)
+
+    assert len(payloads) == 1
+    assert last_seen[(_BARCODE, 1)] == ("resolved", "resolved")
+    assert last_seen[(_BARCODE, 2)] == ("resolved", "pending")
 
 
 # ── Status mapping ───────────────────────────────────────────────────────────
@@ -621,3 +659,42 @@ def test_refresh_detection_prunes_removed_rows():
     assert len(out) == 1
     assert ("gone", _RETAILER_ID) not in last
     assert (_BARCODE, _RETAILER_ID) in last
+
+
+def test_refresh_detection_keys_are_composite_across_retailers():
+    """Same barcode, two retailers, one call: two independent slots, and no cross-suppression."""
+    last = {
+        (_BARCODE, 1): ("2026-07-22T09:00:00+00:00", None),
+        (_BARCODE, 2): ("2026-07-22T09:00:00+00:00", None),
+    }
+    rows = [
+        _make_refresh_row(retailer_id=1, off_ts="2026-07-22T09:00:00+00:00"),   # unchanged
+        _make_refresh_row(retailer_id=2, off_ts="2026-07-22T10:00:00+00:00"),   # advanced
+    ]
+    out = _compute_refresh_updates(rows, last)
+
+    assert len(out) == 1
+    assert json.loads(out[0])["retailer"] == 2
+    assert last[(_BARCODE, 1)] == ("2026-07-22T09:00:00+00:00", None)
+    assert last[(_BARCODE, 2)] == ("2026-07-22T10:00:00+00:00", None)
+
+
+# ── build_scan_notification (the 2d lean builder, exercised directly) ─────────
+
+def test_build_scan_notification_shape():
+    """The sessionless wire contract, pinned at the builder rather than only end-to-end.
+
+    Exact equality: any extra key here is a contract change, and search.js reads `retailer`
+    while feed.js keys off `in_session`.
+    """
+    assert build_scan_notification(_BARCODE, 7) == {
+        "type": "scan",
+        "barcode": _BARCODE,
+        "retailer": 7,
+        "in_session": False,
+    }
+
+
+def test_build_scan_notification_needs_no_db_row():
+    """It is deliberately DB-free — a sessionless scan has no session_items row to read."""
+    assert build_scan_notification("00000000", 1)["barcode"] == "00000000"

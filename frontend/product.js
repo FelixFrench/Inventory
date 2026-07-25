@@ -453,5 +453,6 @@ if (typeof module !== 'undefined') {
     module.exports = {
         refreshEventMatches, decideRefreshAction, mergeRefreshFields,
         findSessionDelta, sessionEventMatches, sessionBannerText,
+        formatPrice,
     };
 }
