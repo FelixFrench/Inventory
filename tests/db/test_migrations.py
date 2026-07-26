@@ -1,5 +1,6 @@
 """Tests for Alembic migration paths — schema constraints, seed rows, V1 upgrade."""
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -1104,6 +1105,23 @@ def _table_shape(conn, table):
     return ti, sorted(fk), sorted(idx)
 
 
+def _create_table_sql(schema_text: str, table: str) -> str:
+    """Return one named CREATE TABLE statement from current_schema.sql.
+
+    current_schema.sql is regenerated from the DDL sqlite itself stores (scripts/
+    regen_current_schema.py), so a table rebuilt by a migration appears exactly as that
+    migration created it: double-quoted (``CREATE TABLE "inventory"``), with named
+    table-level constraints, and in migration order rather than hand-written order. Locating
+    a table by name — tolerating the optional quoting, independent of object order — replaces
+    the positional string slicing these tests used when the file was hand-formatted.
+    """
+    header = re.compile(rf'\s*CREATE TABLE "?{re.escape(table)}"?[\s(]', re.IGNORECASE)
+    for statement in schema_text.split(";\n"):
+        if statement.strip() and header.match(statement):
+            return statement.strip() + ";\n"
+    raise AssertionError(f"No CREATE TABLE for {table!r} in current_schema.sql")
+
+
 def test_2a_current_schema_matches_migrated():
     """current_schema.sql's 2a tables match a freshly-migrated DB (table_info + FK list +
     index_list), and initial_schema.sql is unchanged."""
@@ -1119,12 +1137,12 @@ def test_2a_current_schema_matches_migrated():
         _upgrade_to_2a_head(db_path)
         migrated = sqlite3.connect(db_path)
 
-        # Build a doc DB from just the 2a CREATE statements in current_schema.sql (they are the
-        # trailing block). FK-to-product_variants is unvalidated at CREATE time, so the three
+        # Build a doc DB from just the 2a CREATE statements in current_schema.sql, each pulled
+        # out by name. FK-to-product_variants is unvalidated at CREATE time, so the three
         # tables stand alone for schema introspection.
         schema_path = Path(__file__).parents[2] / "src" / "db" / "current_schema.sql"
         schema_text = schema_path.read_text()
-        doc_ddl = schema_text[schema_text.index("CREATE TABLE product_groups"):]
+        doc_ddl = "".join(_create_table_sql(schema_text, t) for t in new_tables)
         doc = sqlite3.connect(":memory:")
         doc.executescript(doc_ddl)
 
@@ -1433,13 +1451,13 @@ def test_3a_current_schema_matches_migrated():
         migrated = sqlite3.connect(db_path)
 
         # The full current_schema.sql can't be executescript'd (its CREATE TABLE sqlite_sequence
-        # collides with the AUTOINCREMENT auto-create). Slice out just the two altered tables'
+        # collides with the AUTOINCREMENT auto-create). Pull out just the two altered tables'
         # CREATE statements; FK targets are unvalidated at CREATE time so they stand alone.
         schema_path = Path(__file__).parents[2] / "src" / "db" / "current_schema.sql"
         schema_text = schema_path.read_text()
-        doc_ddl = schema_text[
-            schema_text.index("CREATE TABLE product_variants"):schema_text.index("CREATE TABLE inventory")
-        ]
+        doc_ddl = _create_table_sql(schema_text, "product_variants") + _create_table_sql(
+            schema_text, "prices"
+        )
         doc = sqlite3.connect(":memory:")
         doc.executescript(doc_ddl)
 
@@ -1663,9 +1681,9 @@ def test_3c_current_schema_matches_migrated():
 
         schema_path = Path(__file__).parents[2] / "src" / "db" / "current_schema.sql"
         schema_text = schema_path.read_text()
-        doc_ddl = schema_text[
-            schema_text.index("CREATE TABLE product_variants"):schema_text.index("CREATE TABLE inventory")
-        ]
+        doc_ddl = _create_table_sql(schema_text, "product_variants") + _create_table_sql(
+            schema_text, "prices"
+        )
         doc = sqlite3.connect(":memory:")
         doc.executescript(doc_ddl)
 
