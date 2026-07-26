@@ -778,3 +778,169 @@ def test_all_new_routes_require_auth(client_no_auth):
     for method, url, kwargs in calls:
         resp = getattr(client_no_auth, method)(url, **kwargs)
         assert resp.status_code == 401, f"{method} {url} -> {resp.status_code}"
+
+
+# --- Whole-app auth coverage, derived from the route table ------------------------------
+# The test above pins the groups routes by hand. These two derive the check from
+# ``app.routes`` instead, so a route added later cannot escape it by not being listed:
+# one asserts every key-gated route 401s without a header, the other pins the
+# intentionally-unauthenticated set so widening it has to be a deliberate edit here.
+
+def _route_dependency_names(route) -> set[str]:
+    """Every dependency name in effect on a route, router-level and endpoint-level.
+
+    Endpoint-level ``Depends(...)`` (``verify_docs_access`` on ``/docs``) lives in the
+    dependant tree rather than ``route.dependencies``, so both are walked — otherwise
+    ``/docs`` reads as unauthenticated when it is in fact gated.
+    """
+    names = {
+        getattr(d.dependency, "__name__", "")
+        for d in (getattr(route, "dependencies", None) or [])
+    }
+    dependant = getattr(route, "dependant", None)
+    if dependant is not None:
+        stack = list(dependant.dependencies)
+        while stack:
+            d = stack.pop()
+            names.add(getattr(d.call, "__name__", ""))
+            stack.extend(d.dependencies)
+    return names
+
+
+# Placeholder values for path parameters; any syntactically valid value will do, because
+# the 401 must be raised by the dependency before the handler ever sees them.
+_PATH_PARAM_STUBS = {
+    "barcode": "12345678",
+    "retailer_id": "1",
+    "group_id": "1",
+    "child_group_id": "2",
+}
+
+# The routes that intentionally serve without an X-API-Key. Justification per entry lives
+# in the 4c audit record; the point of pinning it here is that adding to this set is a
+# visible, reviewable change rather than a silent consequence of registering a route.
+_EXPECTED_UNAUTHENTICATED = {
+    ("GET", "/"),                 # redirect to /feed.html, no data
+    ("POST", "/docs-login"),      # the key-exchange endpoint itself; compare_digest'd inside
+    ("GET", "/openapi.json"),     # API structure only, no inventory data
+    ("WEBSOCKET", "/ws"),         # browser WebSocket API cannot send custom headers
+    ("MOUNT", ""),                # StaticFiles mount at "/" serving frontend/
+}
+
+
+def _iter_http_routes():
+    """(methods, path, dependency-names) for every plain HTTP route in the app."""
+    for route in app.routes:
+        methods = getattr(route, "methods", None)
+        if not methods or not hasattr(route, "dependant"):
+            continue
+        yield methods, route.path, _route_dependency_names(route)
+
+
+def test_every_key_gated_route_401s_without_header(client_no_auth):
+    """Every route carrying verify_api_key returns 401 with no X-API-Key header.
+
+    Derived from app.routes rather than a hand-maintained list, so this covers routes
+    added after it was written.
+    """
+    checked = 0
+    for methods, path, deps in _iter_http_routes():
+        if "verify_api_key" not in deps:
+            continue
+        url = path
+        for name, stub in _PATH_PARAM_STUBS.items():
+            url = url.replace("{" + name + "}", stub)
+        assert "{" not in url, f"unsubstituted path parameter in {path}"
+        for method in methods:
+            resp = client_no_auth.request(method, url, json={})
+            assert resp.status_code == 401, (
+                f"{method} {url} -> {resp.status_code} (expected 401 with no API key)"
+            )
+            checked += 1
+    assert checked >= 25, f"only {checked} key-gated route/method pairs found — sweep too narrow"
+
+
+def test_unauthenticated_route_set_is_exactly_as_expected():
+    """The set of routes served without verify_api_key is pinned.
+
+    A new unauthenticated route, or auth removed from an existing one, fails here.
+    ``/docs`` must NOT appear: it is gated by verify_docs_access, not left open.
+    """
+    actual = set()
+    for route in app.routes:
+        deps = _route_dependency_names(route)
+        if "verify_api_key" in deps or "verify_docs_access" in deps:
+            continue
+        methods = getattr(route, "methods", None)
+        if methods:
+            for method in methods:
+                actual.add((method, route.path))
+        elif hasattr(route, "dependant"):          # APIWebSocketRoute
+            actual.add(("WEBSOCKET", route.path))
+        else:                                      # Mount
+            actual.add(("MOUNT", route.path))
+
+    assert actual == _EXPECTED_UNAUTHENTICATED, (
+        f"unauthenticated route set changed\n"
+        f"  unexpectedly open: {sorted(actual - _EXPECTED_UNAUTHENTICATED)}\n"
+        f"  no longer open:    {sorted(_EXPECTED_UNAUTHENTICATED - actual)}"
+    )
+
+
+def test_docs_is_gated_by_docs_access_not_left_open():
+    """/docs carries verify_docs_access — it is authenticated, just by a different means."""
+    docs = [r for r in app.routes if getattr(r, "path", None) == "/docs"]
+    assert len(docs) == 1
+    assert "verify_docs_access" in _route_dependency_names(docs[0])
+    assert "verify_api_key" not in _route_dependency_names(docs[0])
+
+
+# --- Group-name length bound (4c audit, finding 4c-03) ---------------------------------
+# A group name is user-typed free text that is stored, rendered on three pages and printed
+# on a receipt, and it had no upper bound. The project bounds user-typed API input at the
+# schema layer with a Field constraint returning 422 (as ge=0 already does on
+# DeltaUpdateRequest.delta and SetMinimumQuantityRequest.minimum_quantity), so the cap
+# belongs there. 64 matches the _MAX_PQ_LEN precedent in src/worker/off.py.
+#
+# This constrains create and rename only; it does NOT retro-validate stored rows, which is
+# why src/api/printer.py also bounds the string at the render boundary.
+
+_MAX_GROUP_NAME = 64
+
+
+def test_create_group_accepts_name_at_the_length_limit(client):
+    resp = client.post("/groups", json={"name": "N" * _MAX_GROUP_NAME})
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["name"]) == _MAX_GROUP_NAME
+
+
+def test_create_group_rejects_over_long_name(client):
+    resp = client.post("/groups", json={"name": "N" * (_MAX_GROUP_NAME + 1)})
+    assert resp.status_code == 422, resp.text
+
+
+def test_create_group_rejects_grossly_over_long_name(client):
+    resp = client.post("/groups", json={"name": "N" * 100_000})
+    assert resp.status_code == 422, resp.text
+
+
+def test_rename_group_accepts_name_at_the_length_limit(client, db):
+    gid = client.post("/groups", json={"name": "Original"}).json()["id"]
+    resp = client.patch(f"/groups/{gid}", json={"name": "R" * _MAX_GROUP_NAME})
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["name"]) == _MAX_GROUP_NAME
+
+
+def test_rename_group_rejects_over_long_name(client, db):
+    gid = client.post("/groups", json={"name": "Original"}).json()["id"]
+    resp = client.patch(f"/groups/{gid}", json={"name": "R" * (_MAX_GROUP_NAME + 1)})
+    assert resp.status_code == 422, resp.text
+    # The rejected rename must not have partially applied.
+    assert db.execute(
+        "SELECT name FROM product_groups WHERE id = ?", (gid,)
+    ).fetchone()["name"] == "Original"
+
+
+def test_over_long_name_is_rejected_before_it_reaches_the_database(client, db):
+    client.post("/groups", json={"name": "N" * (_MAX_GROUP_NAME + 1)})
+    assert db.execute("SELECT COUNT(*) FROM product_groups").fetchone()[0] == 0

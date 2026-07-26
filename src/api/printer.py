@@ -25,6 +25,34 @@ def _identifier(name: str | None, brand: str | None, barcode: str) -> str:
     return f"{base} ({brand})" if brand else base
 
 
+# Display bound for any untrusted string reaching the printer. 120 characters is ~6 wrapped
+# lines at the 21-column name width, against 259 lines for an unbounded 5000-character name.
+# It clears the longest realistic value (an OFF product_name runs to ~120 characters), so it
+# only bites values that are already anomalous.
+_MAX_PRINT_IDENT_LEN = 120
+
+# C0 controls plus DEL. In an ESC/POS stream these are commands, not text: ESC (0x1B) and
+# GS (0x1D) introduce sequences that fire the cash drawer, cut the paper or reset the
+# device, and the Dummy/Network printers are built with magic_encode_args={"disabled": True},
+# which does no escaping of its own.
+_CONTROL_CHARS = dict.fromkeys(list(range(0x00, 0x20)) + [0x7F], " ")
+
+
+def _safe_ident(text: str) -> str:
+    """Make an untrusted display string safe to write into the ESC/POS stream.
+
+    Applied at the only two points where non-literal text enters the stream (the ``ident``
+    assignments in ``_format_inventory`` and ``_low_stock_section``) rather than inside
+    ``_identifier``: the low-stock groups section passes ``lambda it: it["name"]``, which
+    does not go through ``_identifier`` at all, so sanitising there would leave the
+    user-supplied group name — the one genuinely user-controlled value on this path —
+    unprotected.
+
+    Control characters become spaces (so a name containing a newline still reads as one
+    line) and the result is truncated to ``_MAX_PRINT_IDENT_LEN``.
+    """
+    return str(text).translate(_CONTROL_CHARS)[:_MAX_PRINT_IDENT_LEN]
+
 
 def _row(left: str, right: str, cols: int) -> str:
     name_width = cols - len(right)
@@ -67,11 +95,13 @@ def _format_inventory(report_data: dict) -> bytes:
     )
 
     for item in items:
-        ident = _identifier(item["name"], item["brand"], "")
+        ident = _safe_ident(_identifier(item["name"], item["brand"], ""))
         price = f"£{item['price_pence'] / 100:.2f}" if item["price_pence"] is not None else "—"
         right = f"  {item['quantity']:>{QTY_WIDTH}}  {price:>{PRICE_WIDTH}}"
         id_width = COLS - len(right)
-        lines = textwrap.wrap(ident, id_width, subsequent_indent=' ')
+        # `or [""]` matches _low_stock_section: textwrap.wrap returns [] for a blank or
+        # whitespace-only name, and an unguarded lines[0] would raise IndexError.
+        lines = textwrap.wrap(ident, id_width, subsequent_indent=' ') or [""]
         p.text(_row(lines[0], right, COLS) + "\n")
         for cont in lines[1:]:
             p.text(cont + "\n")
@@ -110,7 +140,7 @@ def _low_stock_section(p, title: str, items: list, empty_msg: str, ident_of, COL
     header_right = f"  {'Have':>{HAVE_WIDTH}}  {'Need':>{NEED_WIDTH}}  {'Short':>{SHORT_WIDTH}}"
     p.text(_row("Name", header_right, COLS) + "\n")
     for item in items:
-        ident = ident_of(item)
+        ident = _safe_ident(ident_of(item))
         right = (
             f"  {item['have']:>{HAVE_WIDTH}}"
             f"  {item['need']:>{NEED_WIDTH}}"
