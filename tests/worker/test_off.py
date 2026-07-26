@@ -221,3 +221,60 @@ def test_lookup_raises_http_error_on_5xx():
         with pytest.raises(requests.HTTPError):
             lookup_barcode("1234567890123")
     off_module._headers = None
+
+
+# ---------------------------------------------------------------------------
+# name / brand length bound (4c audit, finding 4c-04)
+# ---------------------------------------------------------------------------
+# product_quantity has been bounded at _MAX_PQ_LEN = 64 since the previous audit, but name
+# and brand were unbounded, so an anomalous OFF response could write an arbitrarily large
+# TEXT blob and drive an arbitrarily long receipt. They follow the same silent-truncation-
+# at-ingestion precedent, but at a LARGER bound: both are re-emitted outbound as the
+# Sainsbury's search keyword (sainsburys._build_query), so a 64-char cap would silently
+# degrade price lookups for legitimately long product names.
+
+def _lookup(**product_fields):
+    resp = _make_response(_product_response(**product_fields))
+    with patch("requests.get", return_value=resp), \
+         patch.dict(os.environ, {"OFF_CONTACT_EMAIL": "test@example.com"}):
+        off_module._headers = None
+        result = lookup_barcode("1234567890123")
+    off_module._headers = None
+    return result
+
+
+def test_lookup_name_truncated_to_max_text_len():
+    result = _lookup(product_name="N" * 5000, brands="Heinz", product_quantity=400,
+                     product_quantity_unit="g")
+    assert len(result["name"]) == off_module._MAX_TEXT_LEN
+    assert result["name"] == "N" * off_module._MAX_TEXT_LEN
+
+
+def test_lookup_brand_truncated_to_max_text_len():
+    result = _lookup(product_name="Beans", brands="B" * 5000, product_quantity=400,
+                     product_quantity_unit="g")
+    assert len(result["brand"]) == off_module._MAX_TEXT_LEN
+
+
+def test_text_bound_is_looser_than_the_quantity_bound():
+    """The name/brand bound must clear the ~120-char realistic maximum.
+
+    Bounding these at _MAX_PQ_LEN would truncate real product names and corrupt the
+    Sainsbury's search keyword built from them.
+    """
+    assert off_module._MAX_TEXT_LEN > off_module._MAX_PQ_LEN
+    assert off_module._MAX_TEXT_LEN >= 120
+
+
+def test_realistic_long_name_passes_through_untouched_into_the_price_query():
+    """A 150-character name must survive ingestion AND reach _build_query unchanged."""
+    name = ("Sainsbury's Taste the Difference Slow Matured Aberdeen Angus Beef "
+            "Lasagne with Bechamel Sauce and Mature Cheddar Topping, Family Size")
+    assert len(name) == 133, len(name)
+    result = _lookup(product_name=name, brands="Sainsbury's", product_quantity=400,
+                     product_quantity_unit="g")
+    assert result["name"] == name, "a realistic long name must not be truncated"
+
+    from src.worker.sainsburys import _build_query
+    query = _build_query(result["brand"], result["name"], result["product_quantity"])
+    assert name in query, "the full name must reach the Sainsbury's search keyword"

@@ -223,3 +223,159 @@ def test_post_print_inventory_401_no_auth(client_no_auth):
 def test_post_print_low_stock_401_no_auth(client_no_auth):
     res = client_no_auth.post("/print/low-stock")
     assert res.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Untrusted text reaching the printer (4c audit, findings 4c-01 / 4c-02 / 4c-03)
+# ---------------------------------------------------------------------------
+# Group names are user-supplied free text and product names are OpenFoodFacts-sourced;
+# both are written straight into an ESC/POS byte stream built with
+# magic_encode_args={"disabled": True}, which does no escaping of its own. There are
+# exactly two places where non-literal text enters that stream — the `ident` assignments
+# in _format_inventory and _low_stock_section — and every other p.text() argument is a
+# module literal, a divider, a datetime or an integer.
+
+# ESC/POS sequences with real physical effects on a TM-T88IV.
+_DRAWER_KICK = b"\x1bp"      # ESC p - fire the cash-drawer solenoid
+_PAPER_CUT = b"\x1dVA"       # GS V A - cut the paper
+_PRINTER_RESET = b"\x1b@"    # ESC @ - reset the printer to defaults
+_HOSTILE = "Beans\x1bp\x00\x19\x19 CUT:\x1dVA\x00 RESET:\x1b@"
+
+
+def _assert_no_escpos_injection(hostile: bytes, benign: bytes, where: str):
+    """Assert a hostile name adds no ESC/POS control bytes over an equivalent benign name.
+
+    Absolute byte assertions do not work here: the formatter legitimately emits ESC and GS
+    sequences of its own (bold on/off, alignment, feed, and the real p.cut(), whose
+    parameter bytes include NUL). The airtight check is differential — a sanitised hostile
+    name must not raise the ESC/GS count above the benign baseline — plus absence of the
+    specific sequences the formatter provably never emits.
+    """
+    for label, seq in (
+        ("ESC p drawer kick", _DRAWER_KICK),
+        ("GS V A paper cut", _PAPER_CUT),
+        ("ESC @ printer reset", _PRINTER_RESET),
+    ):
+        assert seq not in benign, f"baseline invalidated: formatter itself emits {label}"
+        assert seq not in hostile, f"{label} from {where} reached the printer stream"
+
+    for label, byte in (("ESC", 0x1B), ("GS", 0x1D)):
+        assert hostile.count(byte) <= benign.count(byte), (
+            f"{where} raised the {label} byte count from "
+            f"{benign.count(byte)} to {hostile.count(byte)}"
+        )
+
+
+def test_low_stock_group_name_cannot_inject_escpos_commands():
+    """A hostile GROUP name must not reach the printer as ESC/POS control bytes.
+
+    This is the path that bypasses _identifier entirely: the groups section's ident_of is
+    `lambda it: it["name"]`, so sanitising inside _identifier would leave it open.
+    """
+    def render(name):
+        return _format_low_stock({
+            "groups": [{"name": name, "have": 0, "need": 5, "short": 5}],
+            "products": [],
+        })
+
+    _assert_no_escpos_injection(render(_HOSTILE), render("Beans"), "a group name")
+
+
+def test_low_stock_product_name_cannot_inject_escpos_commands():
+    """A hostile OFF-sourced PRODUCT name must not inject, via the low-stock section."""
+    def render(name):
+        return _format_low_stock({
+            "groups": [],
+            "products": [{"name": name, "brand": None, "have": 0, "need": 5, "short": 5}],
+        })
+
+    _assert_no_escpos_injection(render(_HOSTILE), render("Beans"), "a low-stock product name")
+
+
+def test_inventory_product_name_cannot_inject_escpos_commands():
+    """A hostile OFF-sourced PRODUCT name must not inject, via the inventory report."""
+    def render(name, brand):
+        return _format_inventory({
+            "items": [{"name": name, "brand": brand, "quantity": 1, "price_pence": 100}],
+            "total_value_pence": 100,
+        })
+
+    _assert_no_escpos_injection(
+        render(_HOSTILE, _HOSTILE), render("Beans", "Heinz"),
+        "an inventory product name or brand",
+    )
+
+
+def test_inventory_whitespace_only_name_does_not_raise():
+    """A whitespace-only name must not crash the inventory receipt.
+
+    textwrap.wrap("   ") returns [], so an unguarded lines[0] raises IndexError and the
+    print endpoint 500s. _low_stock_section already guards this with `or [""]`.
+    """
+    out = _format_inventory({
+        "items": [{"name": "   ", "brand": None, "quantity": 1, "price_pence": 100}],
+        "total_value_pence": 100,
+    })
+    assert isinstance(out, bytes) and len(out) > 0
+
+
+def test_low_stock_whitespace_only_group_name_does_not_raise():
+    out = _format_low_stock({
+        "groups": [{"name": "   ", "have": 0, "need": 1, "short": 1}],
+        "products": [],
+    })
+    assert isinstance(out, bytes) and len(out) > 0
+
+
+def test_print_inventory_endpoint_survives_whitespace_only_name(client, db):
+    """End-to-end: the endpoint must not 500 on a whitespace-only OFF name."""
+    db.execute("INSERT INTO barcodes (barcode) VALUES ('12345678')")
+    db.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand) "
+        "VALUES ('12345678', ?, '   ', NULL)", (_RETAILER_ID,)
+    )
+    db.execute(
+        "INSERT INTO inventory (barcode, retailer_id, quantity) VALUES ('12345678', ?, 2)",
+        (_RETAILER_ID,)
+    )
+    db.commit()
+    with patch("src.api.printer._get_printer", return_value=MagicMock()):
+        res = client.post("/print/inventory")
+    assert res.status_code == 200, res.text
+    assert res.json() == {"printed": True}
+
+
+def test_over_long_group_name_is_bounded_on_the_receipt():
+    """An over-long name must not consume the paper roll.
+
+    The schema cap (max_length=64 on the group-name request models) only constrains new
+    creates and renames, so a legacy row can still carry an arbitrarily long name. The
+    render bound is what covers those.
+    """
+    long_out = _format_low_stock({
+        "groups": [{"name": "A" * 5000, "have": 0, "need": 1, "short": 1}],
+        "products": [],
+    })
+    short_out = _format_low_stock({
+        "groups": [{"name": "A" * 40, "have": 0, "need": 1, "short": 1}],
+        "products": [],
+    })
+    long_lines = long_out.count(b"\n"[0])
+    short_lines = short_out.count(b"\n"[0])
+    # 5000 chars wrapped at the 21-column name width is 259 lines unbounded; the 120-char
+    # display bound holds it to a handful more than the short case.
+    assert long_lines <= short_lines + 6, (
+        f"5000-char name produced {long_lines} lines vs {short_lines} for a short name"
+    )
+
+
+def test_normal_length_name_is_not_truncated():
+    """The display bound must not bite a realistic name."""
+    name = "Sainsbury's Organic Free Range Large Eggs, Box of Six"
+    out = _format_low_stock({
+        "groups": [{"name": name, "have": 0, "need": 1, "short": 1}],
+        "products": [],
+    })
+    # Every word of the name survives (it is wrapped, so match word by word).
+    for word in name.replace(",", "").split():
+        assert word.encode("cp437") in out, f"{word!r} was lost from the receipt"

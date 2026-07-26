@@ -74,15 +74,25 @@ class DocsLoginRequest(BaseModel):
 
 # --- Product groups ----------------------------------------------
 
+# Upper bound on the user-typed group name. It is stored, rendered on three pages and
+# printed on a receipt, so it needs a bound; 64 matches the ``_MAX_PQ_LEN`` precedent that
+# already bounds the OpenFoodFacts-sourced ``product_quantity`` in ``src/worker/off.py``.
+# Enforced at the schema layer (422) because this is user-typed input the client can fix,
+# which is the same mechanism ``ge=0`` uses on ``DeltaUpdateRequest.delta``. Note this
+# constrains create and rename only and does NOT retro-validate stored rows —
+# ``src/api/printer.py`` bounds the string again at the render boundary for that reason.
+MAX_GROUP_NAME_LEN = 64
+
+
 class CreateGroupRequest(BaseModel):
-    name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=MAX_GROUP_NAME_LEN)
     minimum_quantity: int = Field(default=0, ge=0)
 
 
 class UpdateGroupRequest(BaseModel):
     """Partial update: send name, minimum_quantity, or both. ``minimum_quantity`` of 0
     clears the minimum (organisational-only group)."""
-    name: Optional[str] = Field(default=None, min_length=1)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=MAX_GROUP_NAME_LEN)
     minimum_quantity: Optional[int] = Field(default=None, ge=0)
 
 
