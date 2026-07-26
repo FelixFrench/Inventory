@@ -96,8 +96,8 @@ function makeRowHTML(key) {
       <div class="feed-item-meta">${meta}</div>
       <div class="feed-item-qty">
         <button class="qty-btn" data-action="decrement" data-barcode="${esc(r.barcode)}" data-retailer="${safeRetailer}"${decDisabled} aria-label="Decrease">−</button>
-        <span class="qty-count" data-barcode="${esc(r.barcode)}" data-retailer="${r.retailer}">${r.session_delta}</span>
-        <button class="qty-btn" data-action="increment" data-barcode="${esc(r.barcode)}" data-retailer="${r.retailer}" aria-label="Increase">+</button>
+        <span class="qty-count" data-barcode="${esc(r.barcode)}" data-retailer="${safeRetailer}">${sessionDelta}</span>
+        <button class="qty-btn" data-action="increment" data-barcode="${esc(r.barcode)}" data-retailer="${safeRetailer}" aria-label="Increase">+</button>
       </div>`;
 }
 
