@@ -70,7 +70,11 @@ function makeRowHTML(key) {
     const deltaClass = sessionType === 'out' ? 'feed-delta-out' : 'feed-delta-in';
     const deltaSign  = sessionType === 'out' ? '−' : '+';
 
-    const decDisabled = r.session_delta === 0 ? ' disabled' : '';
+    const sessionDelta = Number.isFinite(Number(r.session_delta)) ? Number(r.session_delta) : 0;
+    const inventoryQty = Number.isFinite(Number(r.inventory_quantity)) ? Number(r.inventory_quantity) : 0;
+    const safeRetailer = esc(String(r.retailer ?? ''));
+
+    const decDisabled = sessionDelta === 0 ? ' disabled' : '';
     // Product name links to the internal product-info page (server-supplied).
     const pageHref = sanitiseHref(r.product_page_url);
     const nameLink = pageHref
@@ -85,13 +89,13 @@ function makeRowHTML(key) {
       <div class="feed-row-top">
         ${nameLink}
         <div class="feed-row-right">
-          <span class="${deltaClass}">${deltaSign}${r.session_delta}</span>
-          <span class="feed-item-stock">${r.inventory_quantity ?? 0} in stock</span>
+          <span class="${deltaClass}">${deltaSign}${sessionDelta}</span>
+          <span class="feed-item-stock">${inventoryQty} in stock</span>
         </div>
       </div>
       <div class="feed-item-meta">${meta}</div>
       <div class="feed-item-qty">
-        <button class="qty-btn" data-action="decrement" data-barcode="${esc(r.barcode)}" data-retailer="${r.retailer}"${decDisabled} aria-label="Decrease">−</button>
+        <button class="qty-btn" data-action="decrement" data-barcode="${esc(r.barcode)}" data-retailer="${safeRetailer}"${decDisabled} aria-label="Decrease">−</button>
         <span class="qty-count" data-barcode="${esc(r.barcode)}" data-retailer="${r.retailer}">${r.session_delta}</span>
         <button class="qty-btn" data-action="increment" data-barcode="${esc(r.barcode)}" data-retailer="${r.retailer}" aria-label="Increase">+</button>
       </div>`;
