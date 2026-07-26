@@ -1,21 +1,57 @@
 // esc() lives in shared-utils.js (loaded before this script).
 
-function render(data) {
-  const el = document.getElementById('content');
-  if (data.items.length === 0) {
-    el.innerHTML = '<p class="empty">All items are sufficiently stocked.</p>';
-  } else {
-    const rows = data.items.map(item => `
+function groupsTable(groups) {
+  if (groups.length === 0) {
+    return '<p class="empty">No groups below minimum.</p>';
+  }
+  const rows = groups.map(g => {
+    const nameText = esc(g.name) || '—';
+    const href = sanitiseHref(g.group_page_url);
+    const nameCell = href
+      ? `<td class="cell-link"><a href="${esc(href)}"><div>${nameText}</div></a></td>`
+      : `<td><div>${nameText}</div></td>`;
+    return `
           <tr>
-            <td>
-              <div>${esc(item.name) || '—'}</div>
-              ${item.brand ? '<div class="brand">' + esc(item.brand) + '</div>' : ''}
-            </td>
-            <td>${item.quantity}</td>
-            <td>${item.minimum_quantity}</td>
-            <td class="shortfall-col"><span class="shortfall-badge">${item.shortfall}</span></td>
-          </tr>`).join('');
-    el.innerHTML = `
+            ${nameCell}
+            <td>${g.have}</td>
+            <td>${g.need}</td>
+            <td class="shortfall-col"><span class="shortfall-badge">${g.short}</span></td>
+          </tr>`;
+  }).join('');
+  return `
+          <table>
+            <thead>
+              <tr>
+                <th>Group</th>
+                <th>Have</th>
+                <th>Need</th>
+                <th class="shortfall-col">Short</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>`;
+}
+
+function productsTable(products) {
+  if (products.length === 0) {
+    return '<p class="empty">No products below minimum.</p>';
+  }
+  const rows = products.map(item => {
+    const nameText = esc(item.name) || '—';
+    const brandHtml = item.brand ? '<div class="brand">' + esc(item.brand) + '</div>' : '';
+    const href = sanitiseHref(item.product_page_url);
+    const nameCell = href
+      ? `<td class="cell-link"><a href="${esc(href)}"><div>${nameText}</div>${brandHtml}</a></td>`
+      : `<td><div>${nameText}</div>${brandHtml}</td>`;
+    return `
+          <tr>
+            ${nameCell}
+            <td>${item.have}</td>
+            <td>${item.need}</td>
+            <td class="shortfall-col"><span class="shortfall-badge">${item.short}</span></td>
+          </tr>`;
+  }).join('');
+  return `
           <table>
             <thead>
               <tr>
@@ -27,12 +63,24 @@ function render(data) {
             </thead>
             <tbody>${rows}</tbody>
           </table>`;
-  }
+}
+
+function render(data) {
+  const el = document.getElementById('content');
+  el.innerHTML = `
+        <section class="low-stock-section">
+          <h2>Groups</h2>
+          ${groupsTable(data.groups)}
+        </section>
+        <section class="low-stock-section">
+          <h2>Products</h2>
+          ${productsTable(data.products)}
+        </section>`;
   document.getElementById('loading').classList.add('hidden');
   el.classList.remove('hidden');
 }
 
-(async function init() {
+async function init() {
   try {
     const resp = await fetch('/reports/low-stock', { headers: { 'X-API-Key': API_KEY } });
     if (!resp.ok) throw new Error('Server error ' + resp.status);
@@ -43,27 +91,11 @@ function render(data) {
     err.textContent = 'Could not load low stock report. Check connection.';
     err.classList.remove('hidden');
   }
-})();
-
-let _activeToast = null;
-
-function showToast(message, type) {
-    if (_activeToast) {
-        _activeToast.remove();
-        _activeToast = null;
-    }
-    const toast = document.createElement('div');
-    toast.className = `toast toast--${type}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    _activeToast = toast;
-    setTimeout(() => {
-        toast.remove();
-        if (_activeToast === toast) _activeToast = null;
-    }, 4000);
 }
 
-document.getElementById('print-btn').addEventListener('click', async () => {
+// showToast() lives in shared-utils.js (loaded before this script).
+
+async function onPrintClick() {
     const btn = document.getElementById('print-btn');
     const report = btn.dataset.report;
 
@@ -88,4 +120,17 @@ document.getElementById('print-btn').addEventListener('click', async () => {
     } finally {
         btn.disabled = false;
     }
-});
+}
+
+// Guarded so the module can be required by the Node test runner, where `document` is
+// undefined; in a browser the guard is always true and the load-time wiring is unchanged.
+if (typeof document !== 'undefined') {
+    init();
+    document.getElementById('print-btn').addEventListener('click', onPrintClick);
+}
+
+// Exported for the Node test runner (`node --test frontend/low_stock.test.js`); ignored in
+// the browser, where `module` is undefined and these are plain globals.
+if (typeof module !== 'undefined') {
+    module.exports = { groupsTable, productsTable };
+}

@@ -35,7 +35,7 @@ _TIMEOUT = 10
 _INTER_PAGE_SLEEP = 0.5
 
 
-def _build_query(brand: str, name: str, product_quantity: str | None) -> str:
+def _build_query(brand: str | None, name: str, product_quantity: str | None) -> str:
     """Return a search query string from product metadata, e.g. 'Heinz Baked Beans 415g'."""
     if product_quantity is None:
         return f"{brand} {name}"
@@ -77,7 +77,7 @@ def _extract_price(product: dict[str, Any]) -> dict | None:
     return None
 
 
-def get_price(barcode: str, name: str, brand: str, product_quantity: str | None) -> dict | None:
+def get_price(barcode: str, name: str, brand: str | None, product_quantity: str | None) -> dict | None:
     """
     Search Sainsbury's for a product matching the given barcode.
 

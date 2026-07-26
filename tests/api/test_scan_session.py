@@ -13,11 +13,11 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE inventory (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
-CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL, delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
 CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
@@ -160,10 +160,23 @@ def test_scan_known_barcode_no_price(client, db):
     assert row["price_status"] == "pending"
 
 
-def test_scan_no_active_session(client):
+def test_scan_no_active_session_returns_200(client, db):
+    """With no active session, /scan returns 200 (never 409), writes nothing to
+    inventory or session_items, but does make the barcode known via INSERT OR IGNORE."""
     resp = client.post("/scan", json={"barcode": _BARCODE})
-    assert resp.status_code == 409
-    assert resp.json()["detail"]["error"] == "no_active_session"
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["barcode"] == _BARCODE
+    assert data["in_session"] is False
+    assert data["session_delta"] is None
+
+    # Nothing written to session_items or inventory.
+    assert db.execute("SELECT COUNT(*) FROM session_items").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM inventory").fetchone()[0] == 0
+    # The barcode is now known to the system.
+    assert db.execute(
+        "SELECT 1 FROM barcodes WHERE barcode = ?", (_BARCODE,)
+    ).fetchone() is not None
 
 
 # ---------------------------------------------------------------------------

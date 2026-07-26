@@ -1,6 +1,6 @@
 // State
 let sessionType = null; // 'in' | 'out' | null
-let rows = {};          // barcode → {session_delta, name, brand, weight, price}
+let rows = {};          // rowKey(barcode, retailer) → {barcode, retailer, session_delta, name, brand, quantity, price}
 let endStripOpen = false;
 
 // WebSocket
@@ -65,71 +65,80 @@ function updateBanner() {
 
 // ── Feed rows ────────────────────────────────────────────────────────────────
 
-function makeRowHTML(barcode) {
-    const r = rows[barcode];
+function makeRowHTML(key) {
+    const r = rows[key];
     const deltaClass = sessionType === 'out' ? 'feed-delta-out' : 'feed-delta-in';
     const deltaSign  = sessionType === 'out' ? '−' : '+';
 
-    const decDisabled = r.session_delta === 0 ? ' disabled' : '';
-    const offHref = sanitiseHref(r.off_url);
-    const nameLink = offHref
-        ? `<a href="${esc(offHref)}" target="_blank" rel="noopener noreferrer" class="feed-item-name">${renderField(r.name)}</a>`
+    const sessionDelta = Number.isFinite(Number(r.session_delta)) ? Number(r.session_delta) : 0;
+    const inventoryQty = Number.isFinite(Number(r.inventory_quantity)) ? Number(r.inventory_quantity) : 0;
+    const safeRetailer = esc(String(r.retailer ?? ''));
+
+    const decDisabled = sessionDelta === 0 ? ' disabled' : '';
+    // Product name links to the internal product-info page (server-supplied).
+    const pageHref = sanitiseHref(r.product_page_url);
+    const nameLink = pageHref
+        ? `<a href="${esc(pageHref)}" class="feed-item-name">${renderField(r.name)}</a>`
         : `<span class="feed-item-name">${renderField(r.name)}</span>`;
     const priceHref = sanitiseHref(r.price_url);
     const priceHtml = priceHref
         ? `<a href="${esc(priceHref)}" target="_blank" rel="noopener noreferrer">${renderPrice(r.price)}</a>`
         : renderPrice(r.price);
-    const meta = [renderField(r.brand), renderField(r.weight), priceHtml].join(' · ');
+    const meta = [renderField(r.brand), renderField(r.quantity), priceHtml].join(' · ');
     return `
       <div class="feed-row-top">
         ${nameLink}
         <div class="feed-row-right">
-          <span class="${deltaClass}">${deltaSign}${r.session_delta}</span>
-          <span class="feed-item-stock">${r.inventory_quantity ?? 0} in stock</span>
+          <span class="${deltaClass}">${deltaSign}${sessionDelta}</span>
+          <span class="feed-item-stock">${inventoryQty} in stock</span>
         </div>
       </div>
       <div class="feed-item-meta">${meta}</div>
       <div class="feed-item-qty">
-        <button class="qty-btn" data-action="decrement" data-barcode="${esc(barcode)}"${decDisabled} aria-label="Decrease">−</button>
-        <span class="qty-count" data-barcode="${esc(barcode)}">${r.session_delta}</span>
-        <button class="qty-btn" data-action="increment" data-barcode="${esc(barcode)}" aria-label="Increase">+</button>
+        <button class="qty-btn" data-action="decrement" data-barcode="${esc(r.barcode)}" data-retailer="${safeRetailer}"${decDisabled} aria-label="Decrease">−</button>
+        <span class="qty-count" data-barcode="${esc(r.barcode)}" data-retailer="${safeRetailer}">${sessionDelta}</span>
+        <button class="qty-btn" data-action="increment" data-barcode="${esc(r.barcode)}" data-retailer="${safeRetailer}" aria-label="Increase">+</button>
       </div>`;
 }
 
-function updateRowDOM(barcode) {
-    const el = document.getElementById('row-' + barcode);
+function updateRowDOM(key) {
+    // Row id carries the composite key (row-<barcode>:<retailer>). The colon is only ever
+    // consumed via getElementById (a plain string match, never a CSS/querySelector token).
+    const el = document.getElementById('row-' + key);
     if (!el) return;
-    el.innerHTML = makeRowHTML(barcode);
+    el.innerHTML = makeRowHTML(key);
     const overStock = sessionType === 'out' &&
-                      rows[barcode].session_delta > rows[barcode].inventory_quantity;
+                      rows[key].session_delta > rows[key].inventory_quantity;
     el.classList.toggle('feed-row--warning', overStock);
 }
 
-function addRowToFeed(barcode, prepend = false) {
+function addRowToFeed(key, prepend = false) {
     const list = document.getElementById('feed-list');
     const li = document.createElement('li');
-    li.id = 'row-' + barcode;
+    li.id = 'row-' + key;
     li.className = 'feed-row';
-    li.innerHTML = makeRowHTML(barcode);
+    li.innerHTML = makeRowHTML(key);
     const overStock = sessionType === 'out' &&
-                      rows[barcode].session_delta > rows[barcode].inventory_quantity;
+                      rows[key].session_delta > rows[key].inventory_quantity;
     if (overStock) li.classList.add('feed-row--warning');
     prepend ? list.prepend(li) : list.append(li);
 }
 
 // ── Quantity controls ────────────────────────────────────────────────────────
 
-async function handleDeltaChange(barcode, diff) {
-    const newDelta = Math.max(0, (rows[barcode]?.session_delta ?? 0) + diff);
+async function handleDeltaChange(key, diff) {
+    const r = rows[key];
+    if (!r) return;
+    const newDelta = Math.max(0, (r.session_delta ?? 0) + diff);
     try {
-        const resp = await fetch(`/session/items/${encodeURIComponent(barcode)}`, {
+        const resp = await fetch(overrideUrl(r), {
             method: 'PUT',
             headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
             body: JSON.stringify({ delta: newDelta }),
         });
         if (resp.ok) {
-            rows[barcode].session_delta = newDelta;
-            updateRowDOM(barcode);
+            rows[key].session_delta = newDelta;
+            updateRowDOM(key);
             updateBanner();
         } else {
             showToast('Could not update quantity');
@@ -139,9 +148,16 @@ async function handleDeltaChange(barcode, diff) {
     }
 }
 
+// Quantity-override endpoint for a row: PUT /session/items/{barcode}/{retailer_id}.
+function overrideUrl(r) {
+    return `/session/items/${encodeURIComponent(r.barcode)}/${encodeURIComponent(r.retailer)}`;
+}
+
 function activateInlineEdit(span) {
     const barcode = span.dataset.barcode;
-    const current = rows[barcode]?.session_delta ?? 0;
+    const retailer = span.dataset.retailer;
+    const key = rowKey(barcode, retailer);
+    const current = rows[key]?.session_delta ?? 0;
     const input = document.createElement('input');
     input.type = 'number';
     input.min = '0';
@@ -159,20 +175,21 @@ function activateInlineEdit(span) {
         const newSpan = document.createElement('span');
         newSpan.className = 'qty-count';
         newSpan.dataset.barcode = barcode;
+        newSpan.dataset.retailer = retailer;
         newSpan.textContent = val;
         input.replaceWith(newSpan);
         if (val !== current) {
             // Optimistic update — revert to `current` if the PUT does not persist.
-            rows[barcode].session_delta = val;
-            updateRowDOM(barcode);
+            rows[key].session_delta = val;
+            updateRowDOM(key);
             updateBanner();
             const revert = () => {
-                rows[barcode].session_delta = current;
-                updateRowDOM(barcode);
+                rows[key].session_delta = current;
+                updateRowDOM(key);
                 updateBanner();
             };
             try {
-                const resp = await fetch(`/session/items/${encodeURIComponent(barcode)}`, {
+                const resp = await fetch(overrideUrl(rows[key]), {
                     method: 'PUT',
                     headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
                     body: JSON.stringify({ delta: val }),
@@ -194,6 +211,7 @@ function activateInlineEdit(span) {
         const newSpan = document.createElement('span');
         newSpan.className = 'qty-count';
         newSpan.dataset.barcode = barcode;
+        newSpan.dataset.retailer = retailer;
         newSpan.textContent = current;
         input.replaceWith(newSpan);
     }
@@ -209,36 +227,50 @@ function activateInlineEdit(span) {
 
 // ── WebSocket message handler ────────────────────────────────────────────────
 
-function _storeRow(barcode, msg) {
-    rows[barcode] = {
+// Replaces rows[key] wholesale. Stores barcode/retailer (so DOM/URL builders can recover
+// the full tuple) plus the fields present on BOTH scan and resolution messages — those may
+// legitimately arrive null at scan time and non-null on resolution, so they must overwrite.
+// inventory_quantity is deliberately NOT stored here: it is scan-only, so the resolution
+// handler saves and restores it around this call.
+function _storeRow(key, msg) {
+    rows[key] = {
+        barcode: msg.barcode,
+        retailer: msg.retailer,
         session_delta: msg.session_delta,
         name: msg.name, brand: msg.brand,
-        weight: msg.weight, price: msg.price,
+        quantity: msg.quantity, price: msg.price,
         off_url: msg.off_url,
+        product_page_url: msg.product_page_url,
         price_url: msg.price_url,
     };
 }
 
 function handleWSMessage(msg) {
     if (msg.type === 'scan') {
-        _storeRow(msg.barcode, msg);
-        rows[msg.barcode].inventory_quantity = msg.inventory_quantity ?? 0;
-        if (document.getElementById('row-' + msg.barcode)) {
-            updateRowDOM(msg.barcode);
+        // Sessionless scans (in_session === false) are broadcast to the search page,
+        // not the feed — ignore them here so no phantom row is injected.
+        if (msg.in_session === false) return;
+        const key = rowKey(msg.barcode, msg.retailer);
+        _storeRow(key, msg);
+        rows[key].inventory_quantity = msg.inventory_quantity ?? 0;
+        if (document.getElementById('row-' + key)) {
+            updateRowDOM(key);
         } else {
-            addRowToFeed(msg.barcode, true);
+            addRowToFeed(key, true);
         }
     } else if (msg.type === 'resolution') {
-        if (rows[msg.barcode] !== undefined) {
-            const savedQty = rows[msg.barcode].inventory_quantity ?? 0;
-            _storeRow(msg.barcode, msg);
-            rows[msg.barcode].inventory_quantity = savedQty;
-            updateRowDOM(msg.barcode);
+        const key = rowKey(msg.barcode, msg.retailer);
+        if (rows[key] !== undefined) {
+            const savedQty = rows[key].inventory_quantity ?? 0;
+            _storeRow(key, msg);
+            rows[key].inventory_quantity = savedQty;
+            updateRowDOM(key);
         }
     } else if (msg.type === 'delta_update') {
-        if (rows[msg.barcode] !== undefined) {
-            rows[msg.barcode].session_delta = msg.session_delta;
-            updateRowDOM(msg.barcode);
+        const key = rowKey(msg.barcode, msg.retailer);
+        if (rows[key] !== undefined) {
+            rows[key].session_delta = msg.session_delta;
+            updateRowDOM(key);
         }
     }
     updateBanner();
@@ -313,15 +345,19 @@ function renderActiveSession(session) {
     document.getElementById('active-session').classList.remove('hidden');
     document.getElementById('feed-list').innerHTML = '';
     for (const item of session.items) {
-        rows[item.barcode] = {
+        const key = rowKey(item.barcode, item.retailer);
+        rows[key] = {
+            barcode: item.barcode,
+            retailer: item.retailer,
             session_delta: item.delta, // GET /session uses 'delta'; WS uses 'session_delta'
             inventory_quantity: item.inventory_quantity ?? 0,
             name: item.name, brand: item.brand,
-            weight: item.weight, price: item.price,
+            quantity: item.quantity, price: item.price,
             off_url: item.off_url,
+            product_page_url: item.product_page_url,
             price_url: item.price_url,
         };
-        addRowToFeed(item.barcode);
+        addRowToFeed(key);
     }
     updateBanner();
 }
@@ -397,15 +433,7 @@ function showNegativeModal() {
     document.getElementById('negative-modal').classList.add('visible');
 }
 
-// ── Toast ────────────────────────────────────────────────────────────────────
-
-function showToast(msg) {
-    const toast = document.getElementById('toast');
-    toast.textContent = msg;
-    toast.classList.add('visible');
-    const t = setTimeout(() => toast.classList.remove('visible'), 4000);
-    toast.onclick = () => { clearTimeout(t); toast.classList.remove('visible'); };
-}
+// showToast() lives in shared-utils.js (loaded before this script).
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -424,11 +452,11 @@ async function init() {
     document.getElementById('feed-list').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-action]');
         if (btn && !btn.disabled) {
-            const barcode = btn.dataset.barcode;
+            const key = rowKey(btn.dataset.barcode, btn.dataset.retailer);
             const li = btn.closest('li');
             if (li && li.dataset.editing === 'true') return;
-            if (btn.dataset.action === 'decrement') handleDeltaChange(barcode, -1);
-            if (btn.dataset.action === 'increment') handleDeltaChange(barcode, +1);
+            if (btn.dataset.action === 'decrement') handleDeltaChange(key, -1);
+            if (btn.dataset.action === 'increment') handleDeltaChange(key, +1);
             return;
         }
         const span = e.target.closest('.qty-count[data-barcode]');
@@ -458,4 +486,14 @@ async function init() {
     connectWS();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+// Guarded so the module can be required by the Node test runner, where `document` is
+// undefined; in a browser the guard is always true and the wiring is unchanged.
+if (typeof document !== 'undefined') {
+    document.addEventListener('DOMContentLoaded', init);
+}
+
+// Exported for the Node test runner (`node --test frontend/feed.test.js`); ignored in the
+// browser, where `module` is undefined and these are plain globals.
+if (typeof module !== 'undefined') {
+    module.exports = { overrideUrl, _statusMarkup, renderField, renderPrice };
+}

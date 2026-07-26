@@ -6,12 +6,21 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from src.version import __version__
+
 _headers: dict | None = None
 
 # Defensive cap on the externally-sourced product_quantity string before it is
 # stored. Real values are short ("400g", "500ml"); this bounds an anomalous OFF
 # response from writing an unbounded TEXT blob to the DB.
 _MAX_PQ_LEN = 64
+
+# The same defensive intent for name and brand, but deliberately a LOOSER bound. Unlike
+# product_quantity these are not just stored and rendered — they are re-emitted outbound as
+# the Sainsbury's search keyword (sainsburys._build_query), so truncating them at 64 would
+# silently degrade price lookups. 200 clears the longest realistic OFF product_name (~120
+# characters) while still bounding a multi-kilobyte anomalous response.
+_MAX_TEXT_LEN = 200
 
 
 def _get_headers() -> dict:
@@ -21,7 +30,7 @@ def _get_headers() -> dict:
         email = os.environ.get("OFF_CONTACT_EMAIL")
         if not email:
             raise RuntimeError("OFF_CONTACT_EMAIL not set in config.local.env")
-        _headers = {"User-Agent": f"FFInventory/2.0.0 ({email})"}
+        _headers = {"User-Agent": f"FFInventory/{__version__} ({email})"}
     return _headers
 
 
@@ -53,12 +62,16 @@ def lookup_barcode(barcode: str) -> dict | None:
     name = product.get("product_name") or product.get("product_name_en") or None
     if name == "":
         name = None
+    if name is not None:
+        name = str(name)[:_MAX_TEXT_LEN]
 
     brands = product.get("brands", "")
     if brands:
         brand = brands.split(",")[0].strip() or None
     else:
         brand = None
+    if brand is not None:
+        brand = brand[:_MAX_TEXT_LEN]
 
     product_quantity = None
     pq = product.get("product_quantity")

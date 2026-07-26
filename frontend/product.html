@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inventory — Product</title>
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="docs-nav.css">
+  <link rel="stylesheet" href="product.css">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icons/icon-192.png" type="image/png">
+</head>
+<body>
+  <header>Inventory</header>
+  <nav>
+    <a href="/inventory.html">Inventory</a>
+    <a href="/low_stock.html">Low Stock</a>
+    <a href="/feed.html">Feed</a>
+    <a href="/unresolved.html">Unresolved</a>
+    <a href="/groups.html">Groups</a>
+    <a href="/search.html">Search</a>
+  </nav>
+  <div id="session-banner" class="session-banner hidden">
+    <span id="session-banner-text"></span>
+    <div class="session-banner-controls">
+      <button id="session-minus-btn" class="session-btn" aria-label="Decrease session count" type="button">−</button>
+      <button id="session-plus-btn" class="session-btn" aria-label="Increase session count" type="button">+</button>
+    </div>
+  </div>
+  <main>
+    <p class="error-msg hidden" id="error-msg"></p>
+    <p class="loading" id="loading">Loading</p>
+
+    <div id="detail" hidden>
+      <div class="detail-head">
+        <h1 id="product-name"></h1>
+        <button id="refresh-btn" class="btn-print refresh-btn">Refresh</button>
+      </div>
+      <p class="product-sub" id="product-sub"></p>
+
+      <dl class="fields">
+        <div class="field"><dt>On hand</dt><dd id="current-qty"></dd></div>
+        <div class="field"><dt>Price</dt><dd id="price"></dd></div>
+        <div class="field">
+          <dt>Minimum</dt>
+          <dd class="min-cell">
+            <input type="number" min="0" id="min-input" class="min-input">
+            <button id="min-save" class="min-save">Save</button>
+          </dd>
+        </div>
+      </dl>
+
+      <p class="links" id="links"></p>
+
+      <section class="groups-section">
+        <h2>Groups</h2>
+        <ul id="membership-list" class="membership-list"></ul>
+        <div class="add-row">
+          <select id="group-select" class="group-select"></select>
+          <button id="add-group-btn" class="add-btn">Add to group</button>
+        </div>
+      </section>
+    </div>
+  </main>
+  <footer class="docs-footer">
+    <a href="#" id="docs-link">API Docs</a>
+  </footer>
+
+  <script src="/config.js"></script>
+  <script src="/docs-nav.js"></script>
+  <script src="/shared-utils.js"></script>
+  <script src="/product.js"></script>
+</body>
+</html>

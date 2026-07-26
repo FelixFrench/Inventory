@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Request
 
 from src.api.models import ScanRequest, ScanResponse
-from src.api.routers.ws import build_payload, manager
+from src.api.routers.ws import build_payload, build_scan_notification, manager
 from src.db.db import get_connection
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,13 @@ _503 = HTTPException(
 
 
 def _do_scan(barcode: str, retailer_id: int) -> dict:
-    """Run the full scan DB transaction. Returns scan result dict or raises HTTPException."""
+    """Run the full scan DB transaction. Returns scan result dict or raises HTTPException.
+
+    When a session is active the result carries the full resolved-row fields and
+    ``in_session=True``. When no session is active nothing is written to ``inventory``
+    or ``session_items`` — only the ``barcodes`` row is ensured (FK-safety, so a minimum
+    can later be set on it) — and the result is the lean ``{"barcode", "in_session": False}``.
+    """
     try:
         conn = get_connection()
         try:
@@ -29,7 +35,13 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
                 "SELECT id, type FROM sessions LIMIT 1"
             ).fetchone()
             if session_row is None:
-                raise HTTPException(status_code=409, detail={"error": "no_active_session"})
+                # Sessionless scan: make the barcode known, write nothing else.
+                with conn:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)",
+                        (barcode,),
+                    )
+                return {"barcode": barcode, "in_session": False}
 
             session_id = session_row["id"]
             now = datetime.now(UTC).isoformat()
@@ -53,10 +65,10 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
                     LEFT JOIN prices pr
                            ON pr.barcode = b.barcode AND pr.retailer_id = ?
                     LEFT JOIN inventory inv
-                           ON inv.barcode = b.barcode
+                           ON inv.barcode = b.barcode AND inv.retailer_id = ?
                     WHERE b.barcode = ?
                     """,
-                    (retailer_id, retailer_id, barcode),
+                    (retailer_id, retailer_id, retailer_id, barcode),
                 ).fetchone()
 
                 has_info = bool(check["has_info"])
@@ -75,20 +87,23 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
                 conn.execute(
                     """
                     INSERT INTO session_items
-                        (session_id, barcode, delta, first_scanned_at, info_status, price_status)
-                    VALUES (?, ?, 1, ?, ?, ?)
-                    ON CONFLICT(session_id, barcode) DO UPDATE SET delta = delta + 1
+                        (session_id, barcode, retailer_id, delta, first_scanned_at,
+                         info_status, price_status)
+                    VALUES (?, ?, ?, 1, ?, ?, ?)
+                    ON CONFLICT(session_id, barcode, retailer_id) DO UPDATE SET delta = delta + 1
                     """,
-                    (session_id, barcode, now, info_status, price_status),
+                    (session_id, barcode, retailer_id, now, info_status, price_status),
                 )
 
                 delta = conn.execute(
-                    "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ?",
-                    (session_id, barcode),
+                    "SELECT delta FROM session_items "
+                    "WHERE session_id = ? AND barcode = ? AND retailer_id = ?",
+                    (session_id, barcode, retailer_id),
                 ).fetchone()["delta"]
 
             return {
                 "barcode": barcode,
+                "in_session": True,
                 "session_delta": delta,
                 "info_status": info_status,
                 "price_status": price_status,
@@ -110,15 +125,26 @@ def _do_scan(barcode: str, retailer_id: int) -> dict:
 @router.post("/scan", response_model=ScanResponse)
 async def scan(body: ScanRequest, request: Request) -> ScanResponse:
     """
-    Record a barcode scan against the active session.
+    Record a barcode scan.
 
-    Increments the session delta for the barcode by 1 (or creates the item if first
-    scan). Broadcasts a WebSocket message to all connected clients. Returns 409 if no
-    session is currently active, 503 on transient database contention.
+    With an active session, increments the session delta for the barcode by 1 (or creates
+    the item if first scan) and broadcasts a full ``scan`` message (``in_session: true``).
+    With no active session, writes nothing beyond ensuring the barcodes row and broadcasts
+    a lean ``scan`` message (``in_session: false``). Always returns 200; 503 on transient
+    database contention.
     """
     retailer_id = request.app.state.sainsburys_retailer_id
     result = await asyncio.to_thread(_do_scan, body.barcode, retailer_id)
-    payload = build_payload("scan", result)
+
+    if not result["in_session"]:
+        payload = build_scan_notification(result["barcode"], retailer_id)
+        await manager.broadcast(json.dumps(payload))
+        return ScanResponse(barcode=result["barcode"], in_session=False)
+
+    payload = build_payload("scan", result, retailer_id)
+    payload["in_session"] = True
     payload["inventory_quantity"] = result["inventory_quantity"]
     await manager.broadcast(json.dumps(payload))
-    return ScanResponse(barcode=result["barcode"], session_delta=result["session_delta"])
+    return ScanResponse(
+        barcode=result["barcode"], in_session=True, session_delta=result["session_delta"]
+    )

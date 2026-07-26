@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inventory — Groups</title>
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="docs-nav.css">
+  <link rel="stylesheet" href="groups.css">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icons/icon-192.png" type="image/png">
+</head>
+<body>
+  <header>Inventory</header>
+  <nav>
+    <a href="/inventory.html">Inventory</a>
+    <a href="/low_stock.html">Low Stock</a>
+    <a href="/feed.html">Feed</a>
+    <a href="/unresolved.html">Unresolved</a>
+    <a href="/groups.html" class="active">Groups</a>
+    <a href="/search.html">Search</a>
+  </nav>
+  <main>
+    <h1>Groups</h1>
+
+    <form id="create-form" class="create-form">
+      <input type="text" id="new-name" class="text-input" placeholder="New group name" required>
+      <input type="number" id="new-min" class="min-input" min="0" value="0" aria-label="Minimum quantity">
+      <button type="submit" class="add-btn">Create</button>
+    </form>
+
+    <p class="error-msg hidden" id="error-msg"></p>
+    <p class="loading" id="loading">Loading</p>
+    <div id="content" hidden></div>
+  </main>
+  <footer class="docs-footer">
+    <a href="#" id="docs-link">API Docs</a>
+  </footer>
+
+  <script src="/config.js"></script>
+  <script src="/docs-nav.js"></script>
+  <script src="/shared-utils.js"></script>
+  <script src="/groups.js"></script>
+</body>
+</html>

@@ -1,9 +1,16 @@
 """Tests for Alembic migration paths — schema constraints, seed rows, V1 upgrade."""
 
+import re
 import sqlite3
 from pathlib import Path
 
 import pytest
+
+# Poll 1 / poll 2 selection SQL, imported from the worker so the EQP test below pins the literal
+# queries the worker runs against the production index DDL. They were previously copied here as
+# literals, which could drift out of step with the worker and silently stop pinning anything.
+from src.worker.main import POLL1_SQL as _POLL1_SQL
+from src.worker.main import POLL2_SQL as _POLL2_SQL
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -11,9 +18,9 @@ CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
 CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE inventory (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
-CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
 CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
@@ -39,6 +46,42 @@ INSERT INTO config (key, value) VALUES ('scan_mode', 'out');
 
 _SCHEMA_PATH = Path(__file__).parents[2] / "src" / "db" / "initial_schema.sql"
 
+# Schema as of revision 3001ecf62f32 (the head before the legacy-table drop),
+# including the two tables that migration removes: scan_events and config.
+_PRE_DROP_SCHEMA = """
+CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit' CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT PRIMARY KEY REFERENCES barcodes(barcode), quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
+CREATE TABLE scan_events (id INTEGER PRIMARY KEY AUTOINCREMENT, barcode TEXT NOT NULL, retailer_id INTEGER REFERENCES retailers(id), direction TEXT NOT NULL CHECK(direction IN ('in', 'out')), timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
+"""
+
+# Schema as of revision 605be7ba628c (the head immediately before the 1b re-key):
+# inventory is barcode-PK, session_items is (session_id, barcode)-PK, and prices carries
+# two separate FKs (to barcodes and retailers). Built inline because current_schema.sql is
+# now the *new* shape, so the old state cannot be reconstructed from the schema file.
+_PRE_REKEY_SCHEMA = """
+CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit' CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT PRIMARY KEY REFERENCES barcodes(barcode), quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
+CREATE INDEX idx_session_items_info_pending ON session_items(first_scanned_at) WHERE info_status = 'pending';
+CREATE INDEX idx_session_items_price_pending ON session_items(first_scanned_at) WHERE price_status = 'pending';
+INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
+"""
+
 
 @pytest.fixture
 def db():
@@ -56,8 +99,9 @@ def _seed(conn: sqlite3.Connection, info_status: str = "pending", price_status: 
         (_SESSION_ID,)
     )
     conn.execute(
-        "INSERT INTO session_items (session_id, barcode, delta, info_status, price_status, first_scanned_at) "
-        "VALUES (?, ?, 1, ?, ?, '2026-05-27T10:00:00')",
+        "INSERT INTO session_items "
+        "(session_id, barcode, retailer_id, delta, info_status, price_status, first_scanned_at) "
+        "VALUES (?, ?, 1, 1, ?, ?, '2026-05-27T10:00:00')",
         (_SESSION_ID, _BARCODE, info_status, price_status)
     )
     conn.commit()
@@ -71,8 +115,8 @@ def test_negative_delta_raises_integrity_error(db):
     _seed(db)
     with pytest.raises(sqlite3.IntegrityError):
         db.execute(
-            "INSERT INTO session_items (session_id, barcode, delta, first_scanned_at) "
-            "VALUES (?, ?, -1, '2026-05-27T10:00:00')",
+            "INSERT INTO session_items (session_id, barcode, retailer_id, delta, first_scanned_at) "
+            "VALUES (?, ?, 1, -1, '2026-05-27T10:00:00')",
             (_SESSION_ID, _BARCODE)
         )
 
@@ -85,8 +129,8 @@ def test_invalid_info_status_raises_integrity_error(db):
     db.commit()
     with pytest.raises(sqlite3.IntegrityError):
         db.execute(
-            "INSERT INTO session_items (session_id, barcode, delta, info_status, first_scanned_at) "
-            "VALUES (2, '9999999999999', 1, 'invalid_value', '2026-05-27T10:00:00')"
+            "INSERT INTO session_items (session_id, barcode, retailer_id, delta, info_status, first_scanned_at) "
+            "VALUES (2, '9999999999999', 1, 1, 'invalid_value', '2026-05-27T10:00:00')"
         )
 
 
@@ -98,8 +142,8 @@ def test_invalid_price_status_raises_integrity_error(db):
     db.commit()
     with pytest.raises(sqlite3.IntegrityError):
         db.execute(
-            "INSERT INTO session_items (session_id, barcode, delta, price_status, first_scanned_at) "
-            "VALUES (3, '8888888888888', 1, 'bad_status', '2026-05-27T10:00:00')"
+            "INSERT INTO session_items (session_id, barcode, retailer_id, delta, price_status, first_scanned_at) "
+            "VALUES (3, '8888888888888', 1, 1, 'bad_status', '2026-05-27T10:00:00')"
         )
 
 
@@ -120,7 +164,6 @@ def test_worker_state_seed_row_exists(db):
 
 def test_migration_discards_pending_lookups_rows():
     import tempfile
-    import os
     from alembic.config import Config
     from alembic import command
 
@@ -162,11 +205,10 @@ def test_migration_discards_pending_lookups_rows():
         assert ws is not None
         conn.close()
     finally:
-        os.unlink(db_path)
+        _safe_unlink(db_path)
 
 
 def test_migration_fresh_db():
-    import os
     import tempfile
 
     from alembic import command
@@ -197,4 +239,1464 @@ def test_migration_fresh_db():
         assert ws["off_last_called_at"] == "1970-01-01T00:00:00"
         conn.close()
     finally:
-        os.unlink(db_path)
+        _safe_unlink(db_path)
+
+
+def test_migration_drops_legacy_scan_events_and_config():
+    """605be7ba628c drops scan_events and config; downgrade recreates their structure."""
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        conn = sqlite3.connect(db_path)
+        for stmt in [s.strip() for s in _PRE_DROP_SCHEMA.split(";") if s.strip()]:
+            conn.execute(stmt)
+        conn.commit()
+        # Sanity: both tables exist before the migration.
+        before = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "scan_events" in before
+        assert "config" in before
+        conn.close()
+
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.stamp(alembic_cfg, "3001ecf62f32")
+        command.upgrade(alembic_cfg, "head")
+
+        conn = sqlite3.connect(db_path)
+        after = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "scan_events" not in after
+        assert "config" not in after
+        conn.close()
+
+        # Downgrade recreates both table structures (row data not recoverable).
+        command.downgrade(alembic_cfg, "3001ecf62f32")
+        conn = sqlite3.connect(db_path)
+        restored = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "scan_events" in restored
+        assert "config" in restored
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+# ---------------------------------------------------------------------------
+# 1b: composite re-key of inventory and session_items (revision 1a63b54732eb)
+# ---------------------------------------------------------------------------
+
+_REKEY_REV = "1a63b54732eb"
+_PREV_REV = "605be7ba628c"
+
+
+def _pk_columns(conn, table: str) -> list[str]:
+    """Ordered PK column names for a table."""
+    rows = conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+    pk = [r for r in rows if r[5]]  # r[5] = pk position (0 if not part of PK)
+    pk.sort(key=lambda r: r[5])
+    return [r[1] for r in pk]
+
+
+def _fk_targets(conn, table: str) -> set[str]:
+    """Set of referenced parent-table names for a table's foreign keys."""
+    rows = conn.execute(f"PRAGMA foreign_key_list('{table}')").fetchall()
+    return {r[2] for r in rows}  # r[2] = referenced table
+
+
+def _seed_pre_rekey(conn):
+    # A fully-resolved barcode: product_variants + prices + inventory + session_item.
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000001')")
+    conn.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity) "
+        "VALUES ('5000000000001', 1, 'Beans', 'Heinz', '415g')"
+    )
+    conn.execute(
+        "INSERT INTO prices (barcode, retailer_id, price_pence, price_type, product_url) "
+        "VALUES ('5000000000001', 1, 120, 'unit', 'https://example.test/beans')"
+    )
+    conn.execute(
+        "INSERT INTO inventory (barcode, quantity, minimum_quantity) "
+        "VALUES ('5000000000001', 7, 2)"
+    )
+    # A failed-OFF barcode: inventory + session_item exist WITHOUT a product_variants row
+    # (proves inventory/session_items must NOT FK product_variants).
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000002')")
+    conn.execute(
+        "INSERT INTO inventory (barcode, quantity, minimum_quantity) "
+        "VALUES ('5000000000002', 3, 0)"
+    )
+    conn.execute("INSERT INTO sessions (id, type, started_at) VALUES (1, 'in', '2026-07-04T10:00:00')")
+    conn.execute(
+        "INSERT INTO session_items "
+        "(session_id, barcode, delta, info_status, price_status, first_scanned_at) "
+        "VALUES (1, '5000000000002', 3, 'failed', 'not_possible', '2026-07-04T10:00:00')"
+    )
+    conn.commit()
+
+
+def _partial_index_sql(conn, name: str) -> str | None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def test_rekey_upgrade_shapes_data_and_constraints():
+    """1b upgrade: composite PKs/FKs, partial indexes, backfill, fk_check clean, CHECK survives."""
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        conn = sqlite3.connect(db_path)
+        for stmt in [s.strip() for s in _PRE_REKEY_SCHEMA.split(";") if s.strip()]:
+            conn.execute(stmt)
+        _seed_pre_rekey(conn)
+        conn.close()
+
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.stamp(alembic_cfg, _PREV_REV)
+        # Pinned to the 1b revision (not "head"): 1c drops inventory.minimum_quantity,
+        # which this 1b-scoped test still reads below.
+        command.upgrade(alembic_cfg, _REKEY_REV)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+
+        # Composite PKs.
+        assert _pk_columns(conn, "inventory") == ["barcode", "retailer_id"]
+        assert _pk_columns(conn, "session_items") == ["session_id", "barcode", "retailer_id"]
+        assert _pk_columns(conn, "prices") == ["barcode", "retailer_id"]
+
+        # FK targets: inventory/session_items -> barcodes + retailers, NOT product_variants.
+        inv_fks = _fk_targets(conn, "inventory")
+        assert inv_fks == {"barcodes", "retailers"}, inv_fks
+        si_fks = _fk_targets(conn, "session_items")
+        assert si_fks == {"sessions", "barcodes", "retailers"}, si_fks
+        assert "product_variants" not in inv_fks
+        assert "product_variants" not in si_fks
+
+        # prices: single composite FK to product_variants (its only FK target now).
+        price_fks = conn.execute("PRAGMA foreign_key_list('prices')").fetchall()
+        assert {r["table"] for r in price_fks} == {"product_variants"}, price_fks
+        # exactly one FK id, spanning both columns
+        assert len({r["id"] for r in price_fks}) == 1
+        assert {r["from"] for r in price_fks} == {"barcode", "retailer_id"}
+
+        # Partial indexes recreated with verbatim WHERE clauses.
+        info_sql = _partial_index_sql(conn, "idx_session_items_info_pending")
+        price_sql = _partial_index_sql(conn, "idx_session_items_price_pending")
+        assert info_sql is not None and "WHERE info_status = 'pending'" in info_sql
+        assert price_sql is not None and "WHERE price_status = 'pending'" in price_sql
+
+        # Backfill: every row carries retailer_id = 1 (Sainsbury's).
+        assert conn.execute("SELECT COUNT(*) FROM inventory WHERE retailer_id != 1").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM session_items WHERE retailer_id != 1").fetchone()[0] == 0
+        # Rows preserved.
+        assert conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM session_items").fetchone()[0] == 1
+        inv = conn.execute(
+            "SELECT quantity, minimum_quantity FROM inventory WHERE barcode='5000000000001' AND retailer_id=1"
+        ).fetchone()
+        assert (inv["quantity"], inv["minimum_quantity"]) == (7, 2)
+
+        # foreign_key_check clean.
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+        # CHECK (delta >= 0) survived the rebuild.
+        conn.execute("PRAGMA foreign_keys = ON")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO session_items "
+                "(session_id, barcode, retailer_id, delta, first_scanned_at) "
+                "VALUES (1, '5000000000001', 1, -1, '2026-07-04T10:00:00')"
+            )
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_rekey_downgrade_roundtrip_preserves_data():
+    """upgrade -> downgrade -> upgrade preserves data and restores original PKs/FKs on downgrade."""
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        conn = sqlite3.connect(db_path)
+        for stmt in [s.strip() for s in _PRE_REKEY_SCHEMA.split(";") if s.strip()]:
+            conn.execute(stmt)
+        _seed_pre_rekey(conn)
+        conn.close()
+
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.stamp(alembic_cfg, _PREV_REV)
+        command.upgrade(alembic_cfg, _REKEY_REV)  # 1b-scoped (see note above)
+
+        # Downgrade restores the barcode-only shapes and prices' two separate FKs.
+        command.downgrade(alembic_cfg, _PREV_REV)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        assert _pk_columns(conn, "inventory") == ["barcode"]
+        assert _pk_columns(conn, "session_items") == ["session_id", "barcode"]
+        assert _fk_targets(conn, "prices") == {"barcodes", "retailers"}
+        assert "retailer_id" not in {r[1] for r in conn.execute("PRAGMA table_info('inventory')").fetchall()}
+        # Data preserved through the downgrade.
+        assert conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM session_items").fetchone()[0] == 1
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.close()
+
+        # Re-upgrade: back to composite, data still intact.
+        command.upgrade(alembic_cfg, _REKEY_REV)  # 1b-scoped (see note above)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        assert _pk_columns(conn, "inventory") == ["barcode", "retailer_id"]
+        assert conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM session_items").fetchone()[0] == 1
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_rekey_idempotent_second_run_is_noop():
+    """Re-running upgrade after a manual stamp is a clean no-op via the already-applied guard."""
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        conn = sqlite3.connect(db_path)
+        for stmt in [s.strip() for s in _PRE_REKEY_SCHEMA.split(";") if s.strip()]:
+            conn.execute(stmt)
+        _seed_pre_rekey(conn)
+        conn.close()
+
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.stamp(alembic_cfg, _PREV_REV)
+        command.upgrade(alembic_cfg, _REKEY_REV)  # 1b-scoped (see note above)
+
+        # Simulate a re-run after a manual stamp back to the previous revision:
+        # the guard must detect the fully-applied schema and no-op.
+        command.stamp(alembic_cfg, _PREV_REV)
+        command.upgrade(alembic_cfg, _REKEY_REV)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        assert _pk_columns(conn, "inventory") == ["barcode", "retailer_id"]
+        assert conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0] == 2
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def _stamped_pre_rekey_db():
+    """Build a pre-1b DB stamped at 605be7ba628c and return (db_path, alembic_cfg)."""
+    import tempfile
+
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    conn = sqlite3.connect(db_path)
+    for stmt in [s.strip() for s in _PRE_REKEY_SCHEMA.split(";") if s.strip()]:
+        conn.execute(stmt)
+    _seed_pre_rekey(conn)
+    conn.close()
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    return db_path, alembic_cfg
+
+
+@pytest.mark.parametrize("half_applied", ["inventory", "session_items"])
+def test_rekey_partial_state_raises_runtime_error(half_applied):
+    """The third arm of the idempotency guard: exactly ONE table re-keyed must abort loudly.
+
+    Simulates a crash mid-rebuild by hand-adding retailer_id to one of the two tables. Both
+    directions are pinned so a swapped `inv_done != si_done` predicate cannot pass silently;
+    the both-applied no-op is covered by test_rekey_idempotent_second_run_is_noop.
+    """
+    from alembic import command
+
+    db_path, alembic_cfg = _stamped_pre_rekey_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            f"ALTER TABLE {half_applied} ADD COLUMN retailer_id INTEGER NOT NULL DEFAULT 1"
+        )
+        conn.commit()
+        conn.close()
+
+        command.stamp(alembic_cfg, _PREV_REV)
+        with pytest.raises(RuntimeError, match="partially applied"):
+            command.upgrade(alembic_cfg, _REKEY_REV)
+
+        # The guard must abort BEFORE touching anything: the other table is untouched and no
+        # scratch table was left behind.
+        other = "session_items" if half_applied == "inventory" else "inventory"
+        conn = sqlite3.connect(db_path)
+        assert "retailer_id" not in {
+            r[1] for r in conn.execute(f"PRAGMA table_info('{other}')").fetchall()
+        }
+        leftovers = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'new_%'"
+        ).fetchall()}
+        assert leftovers == set()
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+# ---------------------------------------------------------------------------
+# Partial indexes: presence after the FULL chain, and the worker polls using them
+# ---------------------------------------------------------------------------
+
+def _head_migrated_db():
+    """Create a fresh temp DB migrated all the way to head; return its path."""
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(alembic_cfg, "head")
+    return db_path
+
+
+def test_partial_indexes_survive_the_full_migration_chain():
+    """Both partial indexes exist after `upgrade head`, not merely after the 1b revision.
+
+    test_rekey_upgrade_shapes_data_and_constraints pins them at 1b only, and every later
+    pre-schema hand-creates them inline — so a later migration dropping them would go unseen.
+    """
+    db_path = _head_migrated_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        info_sql = _partial_index_sql(conn, "idx_session_items_info_pending")
+        price_sql = _partial_index_sql(conn, "idx_session_items_price_pending")
+        assert info_sql is not None and "WHERE info_status = 'pending'" in info_sql
+        assert price_sql is not None and "WHERE price_status = 'pending'" in price_sql
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_poll_queries_use_partial_indexes_on_the_migrated_schema():
+    """EXPLAIN QUERY PLAN against the PRODUCTION index DDL (a head-migrated DB).
+
+    The sibling test in tests/worker/test_worker.py runs the same assertions against that
+    file's inline SCHEMA copy; this one proves the indexes the migrations actually create are
+    the ones the polls can use.
+    """
+    db_path = _head_migrated_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+
+        poll1_plan = conn.execute("EXPLAIN QUERY PLAN " + _POLL1_SQL).fetchall()
+        assert any("idx_session_items_info_pending" in r["detail"] for r in poll1_plan), \
+            [r["detail"] for r in poll1_plan]
+
+        poll2_plan = conn.execute("EXPLAIN QUERY PLAN " + _POLL2_SQL).fetchall()
+        assert any("idx_session_items_price_pending" in r["detail"] for r in poll2_plan), \
+            [r["detail"] for r in poll2_plan]
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+# ---------------------------------------------------------------------------
+# 1c: move minimum_quantity from inventory to product_variants (revision 66c63d972d98)
+# ---------------------------------------------------------------------------
+
+_MOVE_MIN_REV = "66c63d972d98"
+
+# Post-1b schema — the state 1c starts from: inventory carries minimum_quantity with a
+# composite PK; product_variants has no minimum_quantity yet. Built inline because
+# current_schema.sql is now the *post-1c* shape and cannot reconstruct the old state.
+_POST_1B_SCHEMA = """
+PRAGMA foreign_keys = ON;
+CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit' CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
+CREATE INDEX idx_session_items_info_pending ON session_items(first_scanned_at) WHERE info_status = 'pending';
+CREATE INDEX idx_session_items_price_pending ON session_items(first_scanned_at) WHERE price_status = 'pending';
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
+INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
+"""
+
+
+def _has_column(conn, table: str, column: str) -> bool:
+    return any(r[1] == column for r in conn.execute(f"PRAGMA table_info('{table}')").fetchall())
+
+
+def _seed_pre_1c(conn):
+    # (a) backfill case: variant row + inventory row with a minimum.
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000001')")
+    conn.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity) "
+        "VALUES ('5000000000001', 1, 'Beans', 'Heinz', '415g')"
+    )
+    conn.execute(
+        "INSERT INTO inventory (barcode, retailer_id, quantity, minimum_quantity) "
+        "VALUES ('5000000000001', 1, 7, 2)"
+    )
+    # (b) orphan-carry case: inventory minimum > 0 with NO product_variants row.
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000002')")
+    conn.execute(
+        "INSERT INTO inventory (barcode, retailer_id, quantity, minimum_quantity) "
+        "VALUES ('5000000000002', 1, 3, 5)"
+    )
+    # (c) zero-minimum orphan (no variant, min 0): must NOT create a carry row.
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000003')")
+    conn.execute(
+        "INSERT INTO inventory (barcode, retailer_id, quantity, minimum_quantity) "
+        "VALUES ('5000000000003', 1, 1, 0)"
+    )
+    conn.commit()
+
+
+def _build_post_1b_db(db_path):
+    conn = sqlite3.connect(db_path)
+    for stmt in [s.strip() for s in _POST_1B_SCHEMA.split(";") if s.strip()]:
+        conn.execute(stmt)
+    _seed_pre_1c(conn)
+    conn.close()
+
+
+def test_move_min_upgrade_backfills_carries_and_drops():
+    """1c upgrade: pv.minimum_quantity added + backfilled, orphan minimum carried as a
+    null-data variant row, zero-minimum orphan skipped, inventory.minimum_quantity dropped."""
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_post_1b_db(db_path)
+
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.stamp(alembic_cfg, _REKEY_REV)
+        command.upgrade(alembic_cfg, "head")
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+
+        # Column moved: present on product_variants, absent from inventory.
+        assert _has_column(conn, "product_variants", "minimum_quantity")
+        assert not _has_column(conn, "inventory", "minimum_quantity")
+
+        # (a) existing variant backfilled from inventory.
+        row = conn.execute(
+            "SELECT minimum_quantity FROM product_variants WHERE barcode='5000000000001' AND retailer_id=1"
+        ).fetchone()
+        assert row["minimum_quantity"] == 2
+
+        # (b) orphan minimum carried into a null-data variant row.
+        carry = conn.execute(
+            "SELECT name, brand, product_quantity, minimum_quantity FROM product_variants "
+            "WHERE barcode='5000000000002' AND retailer_id=1"
+        ).fetchone()
+        assert carry is not None
+        assert carry["minimum_quantity"] == 5
+        assert carry["name"] is None and carry["brand"] is None and carry["product_quantity"] is None
+
+        # (c) zero-minimum orphan did NOT create a carry row.
+        assert conn.execute(
+            "SELECT COUNT(*) FROM product_variants WHERE barcode='5000000000003'"
+        ).fetchone()[0] == 0
+
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_move_min_downgrade_roundtrip_restores_inventory_minimums():
+    """upgrade -> downgrade restores inventory.minimum_quantity for the common case;
+    re-upgrade moves it back. (Orphan-carry rows persist as null-data variant rows — a
+    documented, accepted downgrade artifact.)"""
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_post_1b_db(db_path)
+
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.stamp(alembic_cfg, _REKEY_REV)
+        command.upgrade(alembic_cfg, "head")
+
+        command.downgrade(alembic_cfg, _REKEY_REV)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        assert _has_column(conn, "inventory", "minimum_quantity")
+        assert not _has_column(conn, "product_variants", "minimum_quantity")
+        # Backfill case restored to inventory.
+        assert conn.execute(
+            "SELECT minimum_quantity FROM inventory WHERE barcode='5000000000001' AND retailer_id=1"
+        ).fetchone()["minimum_quantity"] == 2
+        # Orphan minimum restored to inventory from the carry row.
+        assert conn.execute(
+            "SELECT minimum_quantity FROM inventory WHERE barcode='5000000000002' AND retailer_id=1"
+        ).fetchone()["minimum_quantity"] == 5
+        # Documented artifact: the carry variant row still exists after downgrade.
+        assert conn.execute(
+            "SELECT COUNT(*) FROM product_variants WHERE barcode='5000000000002'"
+        ).fetchone()[0] == 1
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.close()
+
+        # Re-upgrade: column moves back onto product_variants.
+        command.upgrade(alembic_cfg, "head")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        assert _has_column(conn, "product_variants", "minimum_quantity")
+        assert not _has_column(conn, "inventory", "minimum_quantity")
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_move_min_idempotent_rerun_is_noop():
+    """Re-running the 1c upgrade after a completed move (inventory column already dropped)
+    is a clean no-op via the column-presence guards; data is untouched."""
+    import tempfile
+
+    from alembic import command
+    from alembic.config import Config
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_post_1b_db(db_path)
+
+        alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+        command.stamp(alembic_cfg, _REKEY_REV)
+        command.upgrade(alembic_cfg, "head")
+
+        # Simulate a re-run after a manual stamp back to the pre-1c revision: the guards
+        # must detect the completed move (inventory col gone, pv col present) and no-op.
+        command.stamp(alembic_cfg, _REKEY_REV)
+        command.upgrade(alembic_cfg, "head")
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        assert _has_column(conn, "product_variants", "minimum_quantity")
+        assert not _has_column(conn, "inventory", "minimum_quantity")
+        assert conn.execute(
+            "SELECT minimum_quantity FROM product_variants WHERE barcode='5000000000001' AND retailer_id=1"
+        ).fetchone()["minimum_quantity"] == 2
+        assert conn.execute(
+            "SELECT minimum_quantity FROM product_variants WHERE barcode='5000000000002' AND retailer_id=1"
+        ).fetchone()["minimum_quantity"] == 5
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+# ---------------------------------------------------------------------------
+# 2a: product-groups data model (revision 9b7941042b52)
+# ---------------------------------------------------------------------------
+
+_2A_REV = "9b7941042b52"
+
+# Schema as of the head 2a chains off (66c63d972d98): product_variants carries
+# minimum_quantity and inventory does not (dropped in 1c). Built inline because
+# current_schema.sql is now the *post-2a* shape. The product_variants PRIMARY KEY is copied
+# verbatim from the head schema — (barcode, retailer_id), in that order — so the new
+# group_variant_members composite FK resolves at insert time (a mismatched order would raise
+# `foreign key mismatch`).
+_PRE_2A_SCHEMA = """
+PRAGMA foreign_keys = ON;
+CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit' CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
+CREATE INDEX idx_session_items_info_pending ON session_items(first_scanned_at) WHERE info_status = 'pending';
+CREATE INDEX idx_session_items_price_pending ON session_items(first_scanned_at) WHERE price_status = 'pending';
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
+INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
+"""
+
+
+def _safe_unlink(db_path):
+    """Best-effort temp-DB cleanup. On Windows a SQLite/WAL handle can linger briefly after
+    the last connection closes, transiently locking the file; force a GC and retry, then give
+    up silently (the OS reclaims %TEMP%)."""
+    import gc
+    import os
+    import time
+
+    for _ in range(20):
+        try:
+            os.unlink(db_path)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            gc.collect()
+            time.sleep(0.1)
+
+
+def _build_pre_2a_db(db_path):
+    conn = sqlite3.connect(db_path)
+    for stmt in [s.strip() for s in _PRE_2A_SCHEMA.split(";") if s.strip()]:
+        conn.execute(stmt)
+    conn.commit()
+    conn.close()
+
+
+def _upgrade_to_2a_head(db_path):
+    from alembic import command
+    from alembic.config import Config
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.stamp(alembic_cfg, _MOVE_MIN_REV)
+    command.upgrade(alembic_cfg, "head")
+    return alembic_cfg
+
+
+def _seed_2a_members(conn):
+    """Two variants, three groups, edges g3 -> g1 -> {g2, v1} and g2 -> v2."""
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000001'), ('5000000000002')")
+    conn.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name) "
+        "VALUES ('5000000000001', 1, 'V1'), ('5000000000002', 1, 'V2')"
+    )
+    conn.execute("INSERT INTO product_groups (id, name) VALUES (1, 'g1'), (2, 'g2'), (3, 'g3')")
+    conn.execute(
+        "INSERT INTO group_variant_members (group_id, barcode, retailer_id) "
+        "VALUES (1, '5000000000001', 1), (2, '5000000000002', 1)"
+    )
+    conn.execute(
+        "INSERT INTO group_group_members (parent_group_id, child_group_id) "
+        "VALUES (1, 2), (3, 1)"
+    )
+    conn.commit()
+
+
+def test_2a_creates_group_tables_and_constraints():
+    """product_groups + edge tables exist with the approved shape, cascade FKs, self-edge and
+    non-negative-minimum CHECKs, and a parent-side (PK) index for the recursive walk."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_2a_db(db_path)
+        _upgrade_to_2a_head(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert {"product_groups", "group_variant_members", "group_group_members"} <= tables
+
+        # product_groups shape.
+        pg_cols = {r["name"]: r for r in conn.execute("PRAGMA table_info('product_groups')").fetchall()}
+        assert pg_cols["id"]["pk"] == 1
+        assert pg_cols["name"]["notnull"] == 1
+        assert pg_cols["minimum_quantity"]["notnull"] == 1
+        assert pg_cols["minimum_quantity"]["dflt_value"] in ("0", 0)
+        # name is UNIQUE (an index exists for it).
+        pg_idx = conn.execute("PRAGMA index_list('product_groups')").fetchall()
+        assert any(r["unique"] for r in pg_idx)
+
+        # Edge FK targets + ON DELETE CASCADE on every edge FK.
+        gvm_fks = conn.execute("PRAGMA foreign_key_list('group_variant_members')").fetchall()
+        assert {r["table"] for r in gvm_fks} == {"product_groups", "product_variants"}
+        assert all(r["on_delete"] == "CASCADE" for r in gvm_fks)
+        ggm_fks = conn.execute("PRAGMA foreign_key_list('group_group_members')").fetchall()
+        assert {r["table"] for r in ggm_fks} == {"product_groups"}
+        assert all(r["on_delete"] == "CASCADE" for r in ggm_fks)
+
+        # Parent-side recursive-walk index: leftmost PK column, shown by index_list (origin 'pk').
+        ggm_idx = conn.execute("PRAGMA index_list('group_group_members')").fetchall()
+        assert any(r["origin"] == "pk" for r in ggm_idx)
+        gvm_idx = conn.execute("PRAGMA index_list('group_variant_members')").fetchall()
+        assert any(r["origin"] == "pk" for r in gvm_idx)
+
+        conn.execute("INSERT INTO product_groups (id, name) VALUES (1, 'grp')")
+        # CHECK(minimum_quantity >= 0).
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO product_groups (name, minimum_quantity) VALUES ('bad', -1)")
+        # Self-edge CHECK(parent_group_id != child_group_id).
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO group_group_members (parent_group_id, child_group_id) VALUES (1, 1)")
+        # name UNIQUE.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO product_groups (name) VALUES ('grp')")
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_2a_cascade_edges_only():
+    """Deleting a group removes only its edges (parent- and child-side); deleting a variant
+    removes its variant edges. Other groups and variants survive. FK enforcement is on."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_2a_db(db_path)
+        _upgrade_to_2a_head(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        _seed_2a_members(conn)  # the edge inserts here resolve the composite FK (R1)
+
+        # Delete g1: drops (g1->v1), (g1->g2) [parent-side] and (g3->g1) [child-side] only.
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("DELETE FROM product_groups WHERE id = 1")
+        conn.commit()
+
+        remaining_groups = {r[0] for r in conn.execute("SELECT id FROM product_groups").fetchall()}
+        assert remaining_groups == {2, 3}  # g2, g3 (child group + parent group) survive
+        # Member variants untouched.
+        assert conn.execute("SELECT COUNT(*) FROM product_variants").fetchone()[0] == 2
+        # Only the g2->v2 variant edge remains; all group-group edges are gone.
+        assert [tuple(r) for r in conn.execute(
+            "SELECT group_id, barcode FROM group_variant_members"
+        ).fetchall()] == [(2, "5000000000002")]
+        assert conn.execute("SELECT COUNT(*) FROM group_group_members").fetchone()[0] == 0
+
+        # Delete a variant: drops the edge referencing it, leaves the group.
+        conn.execute("DELETE FROM product_variants WHERE barcode = '5000000000002'")
+        conn.commit()
+        assert conn.execute("SELECT COUNT(*) FROM group_variant_members").fetchone()[0] == 0
+        assert {r[0] for r in conn.execute("SELECT id FROM product_groups").fetchall()} == {2, 3}
+
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_2a_downgrade_roundtrip():
+    """upgrade -> downgrade drops the 2a tables -> re-upgrade recreates them."""
+    import tempfile
+
+    from alembic import command
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_2a_db(db_path)
+        alembic_cfg = _upgrade_to_2a_head(db_path)
+
+        def _tables():
+            c = sqlite3.connect(db_path)
+            names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            c.close()
+            return names
+
+        assert {"product_groups", "group_variant_members", "group_group_members"} <= _tables()
+
+        command.downgrade(alembic_cfg, _MOVE_MIN_REV)
+        after = _tables()
+        assert not ({"product_groups", "group_variant_members", "group_group_members"} & after)
+        # Pre-2a tables still present (downgrade touched only the 2a objects).
+        assert {"product_variants", "inventory", "session_items"} <= after
+
+        command.upgrade(alembic_cfg, "head")
+        assert {"product_groups", "group_variant_members", "group_group_members"} <= _tables()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_2a_idempotent_partial_apply():
+    """CREATE ... IF NOT EXISTS: with product_groups already present (a simulated partial
+    apply), upgrade completes cleanly and creates the remaining objects."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_2a_db(db_path)
+
+        # Simulate a crash mid-migration: product_groups created, edge tables not yet.
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "CREATE TABLE product_groups ("
+            " id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE,"
+            " minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0))"
+        )
+        conn.commit()
+        conn.close()
+
+        _upgrade_to_2a_head(db_path)  # stamp 66c + upgrade head — must not error
+
+        tables = _tables_of(db_path)
+        assert {"product_groups", "group_variant_members", "group_group_members"} <= tables
+    finally:
+        _safe_unlink(db_path)
+
+
+def _tables_of(db_path):
+    conn = sqlite3.connect(db_path)
+    names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    conn.close()
+    return names
+
+
+def _table_shape(conn, table):
+    """(table_info, foreign_key_list, index_list) as comparable tuple lists for one table."""
+    ti = [tuple(r) for r in conn.execute(f"PRAGMA table_info('{table}')").fetchall()]
+    fk = [(r[2], r[3], r[4], r[6]) for r in conn.execute(f"PRAGMA foreign_key_list('{table}')").fetchall()]
+    idx = [(r[1], r[2], r[3]) for r in conn.execute(f"PRAGMA index_list('{table}')").fetchall()]
+    return ti, sorted(fk), sorted(idx)
+
+
+def _create_table_sql(schema_text: str, table: str) -> str:
+    """Return one named CREATE TABLE statement from current_schema.sql.
+
+    current_schema.sql is regenerated from the DDL sqlite itself stores (scripts/
+    regen_current_schema.py), so a table rebuilt by a migration appears exactly as that
+    migration created it: double-quoted (``CREATE TABLE "inventory"``), with named
+    table-level constraints, and in migration order rather than hand-written order. Locating
+    a table by name — tolerating the optional quoting, independent of object order — replaces
+    the positional string slicing these tests used when the file was hand-formatted.
+    """
+    header = re.compile(rf'\s*CREATE TABLE "?{re.escape(table)}"?[\s(]', re.IGNORECASE)
+    for statement in schema_text.split(";\n"):
+        if statement.strip() and header.match(statement):
+            return statement.strip() + ";\n"
+    raise AssertionError(f"No CREATE TABLE for {table!r} in current_schema.sql")
+
+
+def test_2a_current_schema_matches_migrated():
+    """current_schema.sql's 2a tables match a freshly-migrated DB (table_info + FK list +
+    index_list), and initial_schema.sql is unchanged."""
+    import subprocess
+    import tempfile
+
+    new_tables = ("product_groups", "group_variant_members", "group_group_members")
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_2a_db(db_path)
+        _upgrade_to_2a_head(db_path)
+        migrated = sqlite3.connect(db_path)
+
+        # Build a doc DB from just the 2a CREATE statements in current_schema.sql, each pulled
+        # out by name. FK-to-product_variants is unvalidated at CREATE time, so the three
+        # tables stand alone for schema introspection.
+        schema_path = Path(__file__).parents[2] / "src" / "db" / "current_schema.sql"
+        schema_text = schema_path.read_text()
+        doc_ddl = "".join(_create_table_sql(schema_text, t) for t in new_tables)
+        doc = sqlite3.connect(":memory:")
+        doc.executescript(doc_ddl)
+
+        for t in new_tables:
+            assert _table_shape(migrated, t) == _table_shape(doc, t), t
+        migrated.close()
+        doc.close()
+
+        # initial_schema.sql is frozen — no working-tree diff vs HEAD.
+        repo_root = Path(__file__).parents[2]
+        result = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", "src/db/initial_schema.sql"],
+            cwd=repo_root,
+        )
+        assert result.returncode == 0, "initial_schema.sql must remain unchanged"
+    finally:
+        _safe_unlink(db_path)
+
+
+# ===========================================================================
+# Phase 3a — durable lookup state (a7d2f4e9c1b8)
+# ===========================================================================
+
+_3A_REV = "a7d2f4e9c1b8"
+
+# Schema as of the head 3a chains off (9b7941042b52 / 2a): the post-2a shape, with the group
+# tables present and product_variants/prices WITHOUT the three durable lookup columns 3a adds.
+# Built inline because current_schema.sql is now the *post-3a* shape.
+_PRE_3A_SCHEMA = """
+PRAGMA foreign_keys = ON;
+CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit' CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
+CREATE INDEX idx_session_items_info_pending ON session_items(first_scanned_at) WHERE info_status = 'pending';
+CREATE INDEX idx_session_items_price_pending ON session_items(first_scanned_at) WHERE price_status = 'pending';
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
+CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0));
+CREATE TABLE group_variant_members (group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, PRIMARY KEY (group_id, barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id) ON DELETE CASCADE);
+CREATE TABLE group_group_members (parent_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, child_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, PRIMARY KEY (parent_group_id, child_group_id), CHECK (parent_group_id != child_group_id));
+INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
+"""
+
+_3A_COLUMNS = ("lookup_status", "lookup_failure_count", "last_lookup_datetime")
+
+
+def _build_pre_3a_db(db_path):
+    conn = sqlite3.connect(db_path)
+    for stmt in [s.strip() for s in _PRE_3A_SCHEMA.split(";") if s.strip()]:
+        conn.execute(stmt)
+    conn.commit()
+    conn.close()
+
+
+def _stamp_and_upgrade_3a(db_path):
+    from alembic import command
+    from alembic.config import Config
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.stamp(alembic_cfg, _2A_REV)
+    command.upgrade(alembic_cfg, "head")
+    return alembic_cfg
+
+
+def _seed_pre_3a_rows(db_path):
+    """Seed a resolved variant (with name), a null-name carry variant, and a prices row."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000001'), ('5000000000002')")
+    conn.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name, minimum_quantity) "
+        "VALUES ('5000000000001', 1, 'Baked Beans', 0), "  # OFF-resolved historically
+        "       ('5000000000002', 1, NULL, 3)"              # minimum-only carry row, null name
+    )
+    conn.execute(
+        "INSERT INTO prices (barcode, retailer_id, price_pence, price_type) "
+        "VALUES ('5000000000001', 1, 85, 'unit')"
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_3a_single_head():
+    """The migration graph stays linear through 3a: exactly one head, and 3a chains off 2a.
+    (3c later became the head — see test_3c_single_head — so the head is the current tip, not 3a.)"""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    script = ScriptDirectory.from_config(alembic_cfg)
+    heads = script.get_heads()
+    assert heads == [_3C_REV], heads
+    assert script.get_revision(_3A_REV).down_revision == _2A_REV
+
+
+def test_3a_adds_durable_columns():
+    """Both product_variants and prices gain the three durable columns with the right
+    types/defaults/nullability."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+        _stamp_and_upgrade_3a(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        for table in ("product_variants", "prices"):
+            cols = {r["name"]: r for r in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+            assert set(_3A_COLUMNS) <= set(cols), table
+
+            assert cols["lookup_status"]["type"] == "TEXT"
+            assert cols["lookup_status"]["notnull"] == 1
+            assert cols["lookup_status"]["dflt_value"] == "'pending'"
+
+            assert cols["lookup_failure_count"]["type"] == "INTEGER"
+            assert cols["lookup_failure_count"]["notnull"] == 1
+            assert cols["lookup_failure_count"]["dflt_value"] in ("0", 0)
+
+            assert cols["last_lookup_datetime"]["type"] == "TEXT"
+            assert cols["last_lookup_datetime"]["notnull"] == 0
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3a_backfill():
+    """product_variants: non-null name -> 'resolved', null name -> 'pending'; prices -> all
+    'resolved'; failure counts 0; last_lookup_datetime left NULL (not stamped 'now')."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+        _seed_pre_3a_rows(db_path)
+        _stamp_and_upgrade_3a(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        resolved = conn.execute(
+            "SELECT lookup_status, lookup_failure_count, last_lookup_datetime "
+            "FROM product_variants WHERE barcode = '5000000000001'"
+        ).fetchone()
+        assert resolved["lookup_status"] == "resolved"
+        assert resolved["lookup_failure_count"] == 0
+        assert resolved["last_lookup_datetime"] is None
+
+        carry = conn.execute(
+            "SELECT lookup_status, minimum_quantity FROM product_variants WHERE barcode = '5000000000002'"
+        ).fetchone()
+        assert carry["lookup_status"] == "pending"   # null name stays pending
+        assert carry["minimum_quantity"] == 3        # untouched by the migration
+
+        price = conn.execute(
+            "SELECT lookup_status, lookup_failure_count, last_lookup_datetime "
+            "FROM prices WHERE barcode = '5000000000001'"
+        ).fetchone()
+        assert price["lookup_status"] == "resolved"
+        assert price["lookup_failure_count"] == 0
+        assert price["last_lookup_datetime"] is None
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3a_downgrade_roundtrip():
+    """upgrade -> downgrade removes all six columns -> re-upgrade restores them; row data
+    (name, price) survives the round trip."""
+    import tempfile
+
+    from alembic import command
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+        _seed_pre_3a_rows(db_path)
+        alembic_cfg = _stamp_and_upgrade_3a(db_path)
+
+        def _cols(table):
+            c = sqlite3.connect(db_path)
+            names = {r[1] for r in c.execute(f"PRAGMA table_info('{table}')").fetchall()}
+            c.close()
+            return names
+
+        assert set(_3A_COLUMNS) <= _cols("product_variants")
+        assert set(_3A_COLUMNS) <= _cols("prices")
+
+        command.downgrade(alembic_cfg, _2A_REV)
+        assert not (set(_3A_COLUMNS) & _cols("product_variants"))
+        assert not (set(_3A_COLUMNS) & _cols("prices"))
+        # Row data intact after dropping the columns.
+        c = sqlite3.connect(db_path)
+        assert c.execute("SELECT COUNT(*) FROM product_variants").fetchone()[0] == 2
+        assert c.execute("SELECT price_pence FROM prices WHERE barcode='5000000000001'").fetchone()[0] == 85
+        c.close()
+
+        command.upgrade(alembic_cfg, "head")
+        assert set(_3A_COLUMNS) <= _cols("product_variants")
+        c = sqlite3.connect(db_path)
+        c.row_factory = sqlite3.Row
+        # Backfill re-runs on the fresh re-add.
+        assert c.execute(
+            "SELECT lookup_status FROM product_variants WHERE barcode='5000000000001'"
+        ).fetchone()["lookup_status"] == "resolved"
+        c.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3a_idempotent_and_backfill_not_rerun():
+    """A guarded re-apply (columns already present, e.g. crash after DDL before Alembic stamp) is
+    a no-op: ADD COLUMN is skipped and the backfill does NOT re-run — so a legitimately-'failed'
+    row is not reset to 'resolved'."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+
+        # Simulate a crash mid-migration: the six columns already added by the auto-committed DDL,
+        # but Alembic never advanced. Then a 'failed' price row and a 'failed' variant exist.
+        conn = sqlite3.connect(db_path)
+        for table in ("product_variants", "prices"):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending','resolved','failed'))")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0)")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN last_lookup_datetime TEXT")
+        conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000009')")
+        conn.execute(
+            "INSERT INTO product_variants (barcode, retailer_id, name, lookup_status, lookup_failure_count) "
+            "VALUES ('5000000000009', 1, NULL, 'failed', 2)"
+        )
+        conn.execute(
+            "INSERT INTO prices (barcode, retailer_id, price_pence, lookup_status, lookup_failure_count) "
+            "VALUES ('5000000000009', 1, NULL, 'failed', 2)"
+        )
+        conn.commit()
+        conn.close()
+
+        _stamp_and_upgrade_3a(db_path)  # must not error and must not re-run the backfill
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        pv = conn.execute(
+            "SELECT lookup_status, lookup_failure_count FROM product_variants WHERE barcode='5000000000009'"
+        ).fetchone()
+        assert pv["lookup_status"] == "failed"       # NOT reset to resolved/pending
+        assert pv["lookup_failure_count"] == 2
+        pr = conn.execute(
+            "SELECT lookup_status, lookup_failure_count FROM prices WHERE barcode='5000000000009'"
+        ).fetchone()
+        assert pr["lookup_status"] == "failed"       # NOT reset to resolved
+        assert pr["lookup_failure_count"] == 2
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3a_check_constraints_enforced():
+    """The new CHECKs (invisible to PRAGMA, hand-carried into current_schema.sql) are real:
+    a bad lookup_status and a negative failure count are rejected."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+        _stamp_and_upgrade_3a(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000003')")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO product_variants (barcode, retailer_id, lookup_status) "
+                "VALUES ('5000000000003', 1, 'bogus')"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO product_variants (barcode, retailer_id, lookup_failure_count) "
+                "VALUES ('5000000000003', 1, -1)"
+            )
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3a_current_schema_matches_migrated():
+    """current_schema.sql's product_variants and prices match a freshly-migrated DB (table_info +
+    FK list + index_list), and initial_schema.sql is unchanged."""
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3a_db(db_path)
+        _stamp_and_upgrade_3a(db_path)
+        migrated = sqlite3.connect(db_path)
+
+        # The full current_schema.sql can't be executescript'd (its CREATE TABLE sqlite_sequence
+        # collides with the AUTOINCREMENT auto-create). Pull out just the two altered tables'
+        # CREATE statements; FK targets are unvalidated at CREATE time so they stand alone.
+        schema_path = Path(__file__).parents[2] / "src" / "db" / "current_schema.sql"
+        schema_text = schema_path.read_text()
+        doc_ddl = _create_table_sql(schema_text, "product_variants") + _create_table_sql(
+            schema_text, "prices"
+        )
+        doc = sqlite3.connect(":memory:")
+        doc.executescript(doc_ddl)
+
+        for t in ("product_variants", "prices"):
+            assert _table_shape(migrated, t) == _table_shape(doc, t), t
+        migrated.close()
+        doc.close()
+
+        repo_root = Path(__file__).parents[2]
+        result = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", "src/db/initial_schema.sql"],
+            cwd=repo_root,
+        )
+        assert result.returncode == 0, "initial_schema.sql must remain unchanged"
+    finally:
+        _safe_unlink(db_path)
+
+
+# ===========================================================================
+# Phase 3c — manual-refresh marker (7e7e7787e93d)
+# ===========================================================================
+
+_3C_REV = "7e7e7787e93d"
+
+# Schema as of the head 3c chains off (a7d2f4e9c1b8 / 3a): the post-3a shape, with the three durable
+# lookup columns present on product_variants/prices but WITHOUT the manual_refresh_requested column 3c
+# adds. Built inline because current_schema.sql is now the *post-3c* shape.
+_PRE_3C_SCHEMA = """
+PRAGMA foreign_keys = ON;
+CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
+CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
+CREATE TABLE product_variants (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending','resolved','failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit' CHECK(price_type IN ('unit', 'per_kg')), product_url TEXT NULL, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending','resolved','failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL REFERENCES retailers(id), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
+CREATE INDEX idx_session_items_info_pending ON session_items(first_scanned_at) WHERE info_status = 'pending';
+CREATE INDEX idx_session_items_price_pending ON session_items(first_scanned_at) WHERE price_status = 'pending';
+CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
+CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0));
+CREATE TABLE group_variant_members (group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, PRIMARY KEY (group_id, barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id) ON DELETE CASCADE);
+CREATE TABLE group_group_members (parent_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, child_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, PRIMARY KEY (parent_group_id, child_group_id), CHECK (parent_group_id != child_group_id));
+INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
+INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
+"""
+
+
+def _build_pre_3c_db(db_path):
+    conn = sqlite3.connect(db_path)
+    for stmt in [s.strip() for s in _PRE_3C_SCHEMA.split(";") if s.strip()]:
+        conn.execute(stmt)
+    conn.commit()
+    conn.close()
+
+
+def _stamp_and_upgrade_3c(db_path):
+    from alembic import command
+    from alembic.config import Config
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.stamp(alembic_cfg, _3A_REV)
+    command.upgrade(alembic_cfg, "head")
+    return alembic_cfg
+
+
+def test_3c_single_head():
+    """After the 3c migration there is exactly one Alembic head, and it chains off 3a."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    alembic_cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    script = ScriptDirectory.from_config(alembic_cfg)
+    heads = script.get_heads()
+    assert heads == [_3C_REV], heads
+    assert script.get_revision(_3C_REV).down_revision == _3A_REV
+
+
+def test_3c_adds_marker():
+    """product_variants gains manual_refresh_requested INTEGER NOT NULL DEFAULT 0."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3c_db(db_path)
+        _stamp_and_upgrade_3c(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cols = {r["name"]: r for r in conn.execute("PRAGMA table_info('product_variants')").fetchall()}
+        assert "manual_refresh_requested" in cols
+        col = cols["manual_refresh_requested"]
+        assert col["type"] == "INTEGER"
+        assert col["notnull"] == 1
+        assert col["dflt_value"] in ("0", 0)
+        # prices is untouched.
+        price_cols = {r[1] for r in conn.execute("PRAGMA table_info('prices')").fetchall()}
+        assert "manual_refresh_requested" not in price_cols
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3c_marker_check_enforced():
+    """The inline CHECK (invisible to PRAGMA, hand-carried into current_schema.sql) rejects a value
+    outside {0, 1}."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3c_db(db_path)
+        _stamp_and_upgrade_3c(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000010')")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO product_variants (barcode, retailer_id, manual_refresh_requested) "
+                "VALUES ('5000000000010', 1, 2)"
+            )
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3c_downgrade_roundtrip():
+    """upgrade -> downgrade removes the column -> re-upgrade restores it; row data survives."""
+    import tempfile
+
+    from alembic import command
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3c_db(db_path)
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000011')")
+        conn.execute(
+            "INSERT INTO product_variants (barcode, retailer_id, name) "
+            "VALUES ('5000000000011', 1, 'Baked Beans')"
+        )
+        conn.commit()
+        conn.close()
+
+        alembic_cfg = _stamp_and_upgrade_3c(db_path)
+
+        def _cols():
+            c = sqlite3.connect(db_path)
+            names = {r[1] for r in c.execute("PRAGMA table_info('product_variants')").fetchall()}
+            c.close()
+            return names
+
+        assert "manual_refresh_requested" in _cols()
+
+        command.downgrade(alembic_cfg, _3A_REV)
+        assert "manual_refresh_requested" not in _cols()
+        c = sqlite3.connect(db_path)
+        assert c.execute(
+            "SELECT name FROM product_variants WHERE barcode='5000000000011'"
+        ).fetchone()[0] == "Baked Beans"
+        c.close()
+
+        command.upgrade(alembic_cfg, "head")
+        assert "manual_refresh_requested" in _cols()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3c_idempotent_preserves_set_marker():
+    """A guarded re-apply (column already present, e.g. crash after DDL before Alembic stamp) is a
+    no-op: ADD COLUMN is skipped and a marker set to 1 in between is NOT re-zeroed (there is no
+    backfill)."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3c_db(db_path)
+
+        # Simulate a crash mid-migration: the column already added by auto-committed DDL, Alembic
+        # never advanced, and a marker was set to 1 before the recovery re-run.
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "ALTER TABLE product_variants ADD COLUMN manual_refresh_requested INTEGER NOT NULL "
+            "DEFAULT 0 CHECK(manual_refresh_requested IN (0, 1))"
+        )
+        conn.execute("INSERT INTO barcodes (barcode) VALUES ('5000000000012')")
+        conn.execute(
+            "INSERT INTO product_variants (barcode, retailer_id, manual_refresh_requested) "
+            "VALUES ('5000000000012', 1, 1)"
+        )
+        conn.commit()
+        conn.close()
+
+        _stamp_and_upgrade_3c(db_path)  # must not error and must not re-zero the marker
+
+        conn = sqlite3.connect(db_path)
+        marker = conn.execute(
+            "SELECT manual_refresh_requested FROM product_variants WHERE barcode='5000000000012'"
+        ).fetchone()[0]
+        assert marker == 1
+        conn.close()
+    finally:
+        _safe_unlink(db_path)
+
+
+def test_3c_current_schema_matches_migrated():
+    """current_schema.sql's product_variants matches a freshly-migrated DB (table_info + FK list +
+    index_list), and initial_schema.sql is unchanged."""
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _build_pre_3c_db(db_path)
+        _stamp_and_upgrade_3c(db_path)
+        migrated = sqlite3.connect(db_path)
+
+        schema_path = Path(__file__).parents[2] / "src" / "db" / "current_schema.sql"
+        schema_text = schema_path.read_text()
+        doc_ddl = _create_table_sql(schema_text, "product_variants") + _create_table_sql(
+            schema_text, "prices"
+        )
+        doc = sqlite3.connect(":memory:")
+        doc.executescript(doc_ddl)
+
+        for t in ("product_variants", "prices"):
+            assert _table_shape(migrated, t) == _table_shape(doc, t), t
+        migrated.close()
+        doc.close()
+
+        repo_root = Path(__file__).parents[2]
+        result = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", "src/db/initial_schema.sql"],
+            cwd=repo_root,
+        )
+        assert result.returncode == 0, "initial_schema.sql must remain unchanged"
+    finally:
+        _safe_unlink(db_path)

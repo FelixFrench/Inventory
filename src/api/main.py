@@ -17,10 +17,17 @@ import src.api.dependencies as _api_deps
 from src.api.dependencies import verify_api_key, verify_docs_access
 from src.api.models import DocsLoginRequest
 from src.api.routers import printing as print_router
-from src.api.routers import products, reports, scan, session
-from src.api.routers.ws import POLL_QUERY, build_payload, manager
+from src.api.routers import groups, products, reports, scan, session
+from src.api.routers.ws import (
+    POLL_QUERY,
+    REFRESH_POLL_QUERY,
+    build_payload,
+    build_refresh_notification,
+    manager,
+)
 from src.api.routers.ws import router as ws_router
 from src.db.db import get_connection
+from src.version import __version__
 
 import os
 from dotenv import load_dotenv
@@ -30,38 +37,92 @@ load_dotenv(Path(__file__).parents[2] / "config.local.env")
 logger = logging.getLogger(__name__)
 
 
-def _compute_poll_updates(rows, last_seen: dict) -> list[str]:
+def _compute_poll_updates(rows, last_seen: dict, retailer_id: int) -> list[str]:
     """Pure sync function. Computes which rows changed, mutates last_seen in-place,
-    and returns a list of JSON strings ready to broadcast."""
+    and returns a list of JSON strings ready to broadcast.
+
+    ``last_seen`` is keyed by the composite ``(barcode, retailer_id)`` variant key, matching
+    the session_items PK dimension (session_id is constant for the active session, so it is
+    not part of the key). build_payload still receives the loop's scalar retailer_id
+    unchanged."""
     payloads = []
-    current_barcodes = set()
+    current_keys = set()
     for row in rows:
-        barcode = row["barcode"]
-        current_barcodes.add(barcode)
+        key = (row["barcode"], row["retailer_id"])
+        current_keys.add(key)
         new_status = (row["info_status"], row["price_status"])
-        if last_seen.get(barcode) != new_status:
-            payloads.append(json.dumps(build_payload("resolution", row)))
-            last_seen[barcode] = new_status
-    for b in list(last_seen.keys()):
-        if b not in current_barcodes:
-            del last_seen[b]
+        if last_seen.get(key) != new_status:
+            payloads.append(json.dumps(build_payload("resolution", row, retailer_id)))
+            last_seen[key] = new_status
+    for k in list(last_seen.keys()):
+        if k not in current_keys:
+            del last_seen[k]
     return payloads
 
 
-async def _poll_tick(rows, last_seen: dict) -> None:
+def _compute_refresh_updates(rows, last_seen_refresh: dict) -> list[str]:
+    """Pure sync function for the 'refresh' broadcast (Sprint 2, Phase 3c). SEPARATE from
+    _compute_poll_updates: it watches the durable lookup timestamps on the cache tables, never
+    session_items, and does not touch the resolution/scan detection.
+
+    ``last_seen_refresh`` is keyed by ``(barcode, retailer_id)`` with value ``(off_ts, price_ts)`` —
+    the OFF (product_variants) and price (prices) ``last_lookup_datetime`` values, both possibly None.
+
+    Emits a 'refresh' payload when a row's timestamps advance beyond the snapshot: a new key that
+    already carries at least one non-NULL timestamp, or any later advance / NULL->non-NULL transition.
+    A brand-new key whose timestamps are BOTH NULL (a never-resolved null-data row from set-minimum /
+    group-add / a just-created refresh marker) is recorded as a silent baseline and does NOT broadcast
+    — otherwise a FastAPI restart would emit a useless burst for every unstamped row. Rows whose
+    timestamps are unchanged (including rows that stay NULL) broadcast nothing. Removed rows are pruned.
+
+    Fires for ANY session-less durable write — both manual refresh (3c) and the 3b background
+    scheduler; clients filter by their own barcode, so background broadcasts are cheap and harmless.
+    """
+    payloads = []
+    current_keys = set()
+    for row in rows:
+        key = (row["barcode"], row["retailer_id"])
+        current_keys.add(key)
+        new_ts = (row["off_ts"], row["price_ts"])
+        if key not in last_seen_refresh:
+            # New key: emit only if something has actually been stamped; else record a silent baseline.
+            if new_ts != (None, None):
+                payloads.append(json.dumps(build_refresh_notification(row)))
+            last_seen_refresh[key] = new_ts
+        elif last_seen_refresh[key] != new_ts:
+            payloads.append(json.dumps(build_refresh_notification(row)))
+            last_seen_refresh[key] = new_ts
+    for k in list(last_seen_refresh.keys()):
+        if k not in current_keys:
+            del last_seen_refresh[k]
+    return payloads
+
+
+async def _poll_tick(rows, last_seen: dict, retailer_id: int) -> None:
     """Async wrapper: broadcasts all changed payloads from one poll tick."""
-    for payload in _compute_poll_updates(rows, last_seen):
+    for payload in _compute_poll_updates(rows, last_seen, retailer_id):
+        await manager.broadcast(payload)
+
+
+async def _refresh_tick(rows, last_seen_refresh: dict) -> None:
+    """Async wrapper: broadcasts all 'refresh' payloads from one poll tick."""
+    for payload in _compute_refresh_updates(rows, last_seen_refresh):
         await manager.broadcast(payload)
 
 
 async def _session_poll_loop(retailer_id: int) -> None:
-    last_seen: dict[str, tuple[str, str]] = {}
+    last_seen: dict[tuple[str, int], tuple[str, str]] = {}
+    last_seen_refresh: dict[tuple[str, int], tuple[str | None, str | None]] = {}
     conn = get_connection()
     try:
         while True:
             try:
                 rows = conn.execute(POLL_QUERY, (retailer_id, retailer_id)).fetchall()
-                await _poll_tick(rows, last_seen)
+                await _poll_tick(rows, last_seen, retailer_id)
+                # Separate refresh-detection pass on the same connection (3c). Independent of the
+                # session_items resolution detection above; watches the durable cache timestamps.
+                refresh_rows = conn.execute(REFRESH_POLL_QUERY).fetchall()
+                await _refresh_tick(refresh_rows, last_seen_refresh)
             except Exception:
                 logger.exception("Poll loop tick failed")
             await asyncio.sleep(1)
@@ -135,7 +196,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     lifespan=lifespan,
     title="Inventory API",
-    version="2.0.0",
+    version=__version__,
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -145,6 +206,7 @@ app.include_router(scan.router,    dependencies=[Depends(verify_api_key)])
 app.include_router(session.router, dependencies=[Depends(verify_api_key)])
 app.include_router(reports.router,   dependencies=[Depends(verify_api_key)])
 app.include_router(products.router,  dependencies=[Depends(verify_api_key)])
+app.include_router(groups.router,    dependencies=[Depends(verify_api_key)])
 app.include_router(print_router.router, dependencies=[Depends(verify_api_key)])
 app.include_router(ws_router)
 

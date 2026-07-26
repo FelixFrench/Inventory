@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inventory — Group</title>
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="docs-nav.css">
+  <link rel="stylesheet" href="group.css">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icons/icon-192.png" type="image/png">
+</head>
+<body>
+  <header>Inventory</header>
+  <nav>
+    <a href="/inventory.html">Inventory</a>
+    <a href="/low_stock.html">Low Stock</a>
+    <a href="/feed.html">Feed</a>
+    <a href="/unresolved.html">Unresolved</a>
+    <a href="/groups.html">Groups</a>
+    <a href="/search.html">Search</a>
+  </nav>
+  <main>
+    <p class="error-msg hidden" id="error-msg"></p>
+    <p class="loading" id="loading">Loading</p>
+
+    <div id="detail" hidden>
+      <div class="group-head">
+        <input type="text" id="name-input" class="name-input" aria-label="Group name">
+        <button id="name-save" class="add-btn">Rename</button>
+      </div>
+
+      <dl class="fields">
+        <div class="field"><dt>Total on hand</dt><dd id="total-qty"></dd></div>
+        <div class="field">
+          <dt>Minimum (0 = none)</dt>
+          <dd class="min-cell">
+            <input type="number" min="0" id="min-input" class="min-input">
+            <button id="min-save" class="min-save">Save</button>
+          </dd>
+        </div>
+        <div class="field"><dt>Status</dt><dd id="status-cell"></dd></div>
+      </dl>
+
+      <section class="members-section">
+        <h2>Products</h2>
+        <ul id="variant-list" class="member-list"></ul>
+        <div class="add-row">
+          <input type="text" id="variant-barcode" class="text-input" placeholder="Barcode" inputmode="numeric">
+          <button id="add-variant-btn" class="add-btn">Add product</button>
+        </div>
+      </section>
+
+      <section class="members-section">
+        <h2>Sub-groups</h2>
+        <ul id="subgroup-list" class="member-list"></ul>
+        <div class="add-row">
+          <select id="subgroup-select" class="group-select"></select>
+          <button id="add-subgroup-btn" class="add-btn">Add sub-group</button>
+        </div>
+      </section>
+
+      <section class="danger-section">
+        <button id="delete-btn" class="delete-btn">Delete group</button>
+      </section>
+    </div>
+
+    <div id="delete-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-title">Delete this group?</div>
+        <p class="modal-body">
+          This removes only the group and its membership edges. Its member products and
+          sub-groups are <strong>not</strong> deleted, and the group is silently removed
+          from any parent groups it belongs to.
+        </p>
+        <div class="modal-buttons">
+          <button id="confirm-delete" class="delete-btn">Delete group</button>
+          <button id="cancel-delete" class="add-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </main>
+  <footer class="docs-footer">
+    <a href="#" id="docs-link">API Docs</a>
+  </footer>
+
+  <script src="/config.js"></script>
+  <script src="/docs-nav.js"></script>
+  <script src="/shared-utils.js"></script>
+  <script src="/group.js"></script>
+</body>
+</html>

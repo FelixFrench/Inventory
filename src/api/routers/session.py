@@ -17,6 +17,7 @@ from src.api.models import (
 )
 from src.api.routers.ws import manager
 from src.api.urls import off_url as build_off_url
+from src.api.urls import product_page_url
 from src.db.db import get_connection
 
 router = APIRouter(tags=["Session"])
@@ -37,6 +38,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
     rows = conn.execute(
         """
         SELECT si.barcode,
+               si.retailer_id,
                si.delta,
                si.info_status,
                si.price_status,
@@ -50,11 +52,11 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
         FROM   session_items si
         LEFT   JOIN product_variants pv ON pv.barcode = si.barcode AND pv.retailer_id = ?
         LEFT   JOIN prices pr            ON pr.barcode = si.barcode AND pr.retailer_id = ?
-        LEFT   JOIN inventory inv        ON inv.barcode = si.barcode
+        LEFT   JOIN inventory inv        ON inv.barcode = si.barcode AND inv.retailer_id = ?
         WHERE  si.session_id = ?
         ORDER  BY si.first_scanned_at ASC
         """,
-        (retailer_id, retailer_id, session_row['id'])
+        (retailer_id, retailer_id, retailer_id, session_row['id'])
     ).fetchall()
 
     items = []
@@ -64,19 +66,21 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
             "failed" if r['price_status'] == "not_possible" else r['price_status']
         )
 
-        weight_val = r['product_quantity']
+        quantity_val = r['product_quantity']
         price_val = r['price_pence'] / 100 if r['price_pence'] is not None else None
 
         items.append({
             "barcode": r['barcode'],
+            "retailer": r['retailer_id'],
             "delta": r['delta'],
             "inventory_quantity": r['inventory_quantity'],
             "first_scanned_at": r['first_scanned_at'],
             "name": {"value": r['name'], "status": info_s},
             "brand": {"value": r['brand'], "status": info_s},
-            "weight": {"value": weight_val, "status": info_s},
+            "quantity": {"value": quantity_val, "status": info_s},
             "price": {"value": price_val, "status": price_s},
             "off_url":   build_off_url(r['barcode'], info_status=r['info_status']),
+            "product_page_url": product_page_url(r['barcode'], retailer_id),
             "price_url": r['product_url'],
         })
 
@@ -85,6 +89,7 @@ def _build_session_object(conn: sqlite3.Connection, retailer_id: int, session_ro
         type=session_row['type'],
         started_at=session_row['started_at'],
         recovered_at=session_row['recovered_at'],
+        retailer=retailer_id,
         total_delta=total_delta,
         items=[SessionItem(**item) for item in items],
     )
@@ -205,7 +210,8 @@ def confirm_session(retailer_id: int = Depends(get_retailer_id)) -> ConfirmRespo
                                COALESCE(inv.quantity, 0) AS current_qty,
                                si.delta
                         FROM   session_items si
-                        LEFT   JOIN inventory inv ON inv.barcode = si.barcode
+                        LEFT   JOIN inventory inv
+                               ON inv.barcode = si.barcode AND inv.retailer_id = si.retailer_id
                         WHERE  si.session_id = ?
                           AND  (COALESCE(inv.quantity, 0) - si.delta) < 0
                         """,
@@ -231,18 +237,20 @@ def confirm_session(retailer_id: int = Depends(get_retailer_id)) -> ConfirmRespo
                 if session_type == "in":
                     conn.execute(
                         """
-                        INSERT INTO inventory (barcode, quantity)
-                        SELECT barcode, delta FROM session_items WHERE session_id = ? AND delta != 0
-                        ON CONFLICT(barcode) DO UPDATE SET quantity = quantity + excluded.quantity
+                        INSERT INTO inventory (barcode, retailer_id, quantity)
+                        SELECT barcode, retailer_id, delta FROM session_items
+                        WHERE session_id = ? AND delta != 0
+                        ON CONFLICT(barcode, retailer_id) DO UPDATE SET quantity = quantity + excluded.quantity
                         """,
                         (session_id,)
                     )
                 else:
                     conn.execute(
                         """
-                        INSERT INTO inventory (barcode, quantity)
-                        SELECT barcode, delta FROM session_items WHERE session_id = ? AND delta != 0
-                        ON CONFLICT(barcode) DO UPDATE SET quantity = quantity - excluded.quantity
+                        INSERT INTO inventory (barcode, retailer_id, quantity)
+                        SELECT barcode, retailer_id, delta FROM session_items
+                        WHERE session_id = ? AND delta != 0
+                        ON CONFLICT(barcode, retailer_id) DO UPDATE SET quantity = quantity - excluded.quantity
                         """,
                         (session_id,)
                     )
@@ -304,7 +312,7 @@ def discard_session() -> DiscardResponse:
         raise _503
 
 
-def _do_put_delta(barcode: str, new_delta: int) -> dict | None:
+def _do_put_delta(barcode: str, retailer_id: int, new_delta: int) -> dict | None:
     conn = get_connection()
     try:
         row = conn.execute("SELECT id FROM sessions LIMIT 1").fetchone()
@@ -312,8 +320,9 @@ def _do_put_delta(barcode: str, new_delta: int) -> dict | None:
             return None
         session_id = row["id"]
         cur = conn.execute(
-            "UPDATE session_items SET delta = ? WHERE session_id = ? AND barcode = ?",
-            (new_delta, session_id, barcode),
+            "UPDATE session_items SET delta = ? "
+            "WHERE session_id = ? AND barcode = ? AND retailer_id = ?",
+            (new_delta, session_id, barcode, retailer_id),
         )
         if cur.rowcount == 0:
             raise ValueError("item_not_found")
@@ -330,22 +339,29 @@ def _do_put_delta(barcode: str, new_delta: int) -> dict | None:
         conn.close()
 
 
-@router.put("/session/items/{barcode}")
-async def put_session_item_delta(barcode: str, body: DeltaUpdateRequest) -> dict:
+@router.put("/session/items/{barcode}/{retailer_id}")
+async def put_session_item_delta(
+    barcode: str, retailer_id: int, body: DeltaUpdateRequest
+) -> dict:
     """
     Update the delta for a specific item in the active session.
 
-    Sets the item's session delta to the supplied value and broadcasts a WebSocket
-    update to all connected clients. A negative delta is rejected at the schema layer
-    (422, DeltaUpdateRequest.delta has ge=0). Returns 404 if the barcode is not in the
-    current session, 409 if no session is active.
+    The item is addressed by the composite ``(barcode, retailer_id)`` variant key (both
+    path segments). Sets the item's session delta to the supplied value and broadcasts a
+    WebSocket update to all connected clients. A negative delta is rejected at the schema
+    layer (422, DeltaUpdateRequest.delta has ge=0). Returns 404 if that variant is not in
+    the current session, 409 if no session is active.
+
+    A nonexistent retailer_id is not special-cased: this addresses a *session item*, not a
+    product variant, so an unknown retailer simply misses the composite WHERE and falls
+    through to the same 404 item_not_found path as an unknown barcode.
     """
     # Defence in depth: schema validation (Field(ge=0)) already rejects negatives
     # with 422 before this handler runs, so this branch is not reachable via HTTP.
     if body.delta < 0:
         raise HTTPException(status_code=400, detail={"error": "invalid_delta"})
     try:
-        result = await asyncio.to_thread(_do_put_delta, barcode, body.delta)
+        result = await asyncio.to_thread(_do_put_delta, barcode, retailer_id, body.delta)
     except ValueError as e:
         if str(e) == "item_not_found":
             raise HTTPException(status_code=404, detail={"error": "item_not_found"})
@@ -355,6 +371,7 @@ async def put_session_item_delta(barcode: str, body: DeltaUpdateRequest) -> dict
     await manager.broadcast(json.dumps({
         "type": "delta_update",
         "barcode": result["barcode"],
+        "retailer": retailer_id,
         "session_delta": result["delta"],
         "session_total_delta": result["session_total_delta"],
     }))

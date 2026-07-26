@@ -1,4 +1,7 @@
+from src.api.groups import is_low_stock, resolve_all_groups, shortfall
+from src.api.urls import group_page_url
 from src.api.urls import off_url as build_off_url
+from src.api.urls import product_page_url
 
 
 def _label_for_info_field(info_status, has_pv_row, field_value) -> str:
@@ -13,7 +16,7 @@ def _label_for_info_field(info_status, has_pv_row, field_value) -> str:
     return 'resolved'
 
 
-def _label_for_price(price_status, has_pr_row, price_pence) -> str:
+def _label_for_price(price_status, has_pr_row, price_pence, price_type) -> str:
     if price_status == 'pending':
         return 'pending'
     if price_status == 'not_possible':
@@ -22,8 +25,12 @@ def _label_for_price(price_status, has_pr_row, price_pence) -> str:
         return 'failed'
     if not has_pr_row:
         return 'missing'
-    if price_pence is None:
+    if price_type == 'per_kg':
+        # Per-kg items store a non-null £/kg price and are tagged price_type='per_kg'.
         return 'per_kg'
+    if price_pence is None:
+        # A null price with a prices row means no successful price lookup, full stop.
+        return 'missing'
     return 'resolved'
 
 
@@ -52,9 +59,9 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
         LEFT JOIN prices pr
                ON pr.barcode = b.barcode AND pr.retailer_id = ?
         LEFT JOIN inventory inv
-               ON inv.barcode = b.barcode
+               ON inv.barcode = b.barcode AND inv.retailer_id = ?
         LEFT JOIN session_items si
-               ON si.barcode = b.barcode AND si.session_id = ?
+               ON si.barcode = b.barcode AND si.session_id = ? AND si.retailer_id = ?
         WHERE (
             pv.barcode     IS NULL
             OR pv.name     IS NULL
@@ -70,7 +77,7 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
             pv.name ASC NULLS LAST,
             b.barcode ASC
         """,
-        (retailer_id, retailer_id, session_id)
+        (retailer_id, retailer_id, retailer_id, session_id, retailer_id)
     ).fetchall()
 
     items = []
@@ -78,12 +85,14 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
         has_pv = row['pv_barcode'] is not None
         has_pr = row['pr_barcode'] is not None
 
-        name_label   = _label_for_info_field(row['info_status'], has_pv, row['name'])
-        brand_label  = _label_for_info_field(row['info_status'], has_pv, row['brand'])
-        weight_label = _label_for_info_field(row['info_status'], has_pv, row['product_quantity'])
-        price_label  = _label_for_price(row['price_status'], has_pr, row['price_pence'])
+        name_label     = _label_for_info_field(row['info_status'], has_pv, row['name'])
+        brand_label    = _label_for_info_field(row['info_status'], has_pv, row['brand'])
+        quantity_label = _label_for_info_field(row['info_status'], has_pv, row['product_quantity'])
+        price_label    = _label_for_price(
+            row['price_status'], has_pr, row['price_pence'], row['price_type']
+        )
 
-        if all(label == 'resolved' for label in [name_label, brand_label, weight_label, price_label]):
+        if all(label == 'resolved' for label in [name_label, brand_label, quantity_label, price_label]):
             continue
 
         price_value = round(row['price_pence'] / 100, 2) if row['price_pence'] is not None else None
@@ -91,11 +100,12 @@ def get_unresolved_report(db, retailer_id: int) -> dict:
         items.append({
             "barcode":            row['barcode'],
             "inventory_quantity": row['inventory_quantity'],
-            "name":   {"value": row['name'],                  "label": name_label},
-            "brand":  {"value": row['brand'],                 "label": brand_label},
-            "weight": {"value": row['product_quantity'], "label": weight_label},
-            "price":  {"value": price_value,                  "label": price_label},
+            "name":     {"value": row['name'],             "label": name_label},
+            "brand":    {"value": row['brand'],            "label": brand_label},
+            "quantity": {"value": row['product_quantity'], "label": quantity_label},
+            "price":    {"value": price_value,             "label": price_label},
             "off_url":   build_off_url(row['barcode'], name=row['name']),
+            "product_page_url": product_page_url(row['barcode'], retailer_id),
             "price_url": row['product_url'],
         })
 
@@ -108,11 +118,12 @@ def get_inventory_report(db, retailer_id: int) -> dict:
         SELECT i.barcode, COALESCE(pv.name, i.barcode) AS name, pv.brand, i.quantity,
                p.price_pence, p.product_url
         FROM inventory i
-        LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = ?
-        LEFT JOIN prices p ON p.barcode = i.barcode AND p.retailer_id = ?
+        LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = i.retailer_id
+        LEFT JOIN prices p ON p.barcode = i.barcode AND p.retailer_id = i.retailer_id
+        WHERE i.retailer_id = ?
         ORDER BY (i.quantity = 0), LOWER(COALESCE(pv.name, i.barcode))
         """,
-        (retailer_id, retailer_id)
+        (retailer_id,)
     ).fetchall()
 
     items = []
@@ -128,23 +139,66 @@ def get_inventory_report(db, retailer_id: int) -> dict:
             "price_pence": r["price_pence"],
             "line_total_pence": line,
             "off_url":   build_off_url(r["barcode"], name=r["name"]),
+            "product_page_url": product_page_url(r["barcode"], retailer_id),
             "price_url": r["product_url"],
         })
     return {"items": items, "total_value_pence": total}
 
 
 def get_low_stock_report(db, retailer_id: int) -> dict:
+    """Two independent sections: groups below their own minimum, and products below theirs.
+
+    A variant and a group it belongs to are evaluated independently and can both appear.
+    The groups section is produced via ``resolve_group`` (no re-derived member-sum); the
+    products section's have/need/short come from the shared ``is_low_stock`` / ``shortfall``
+    helpers (no inline arithmetic).
+    """
+    # low_stock already encodes (minimum > 0 AND total < minimum), so organisational groups
+    # (minimum 0) are excluded here. Sort the resolutions before shaping to dicts.
+    low_groups = [g for g in resolve_all_groups(db) if g.low_stock]
+    low_groups.sort(key=lambda g: (-g.shortfall, g.name.lower()))
+    groups = [
+        {
+            "group_id": g.group_id,
+            "name": g.name,
+            "have": g.total_quantity,
+            "need": g.minimum_quantity,
+            "short": g.shortfall,
+            "group_page_url": group_page_url(g.group_id),
+        }
+        for g in low_groups
+    ]
+
+    # Minimum now lives on product_variants, so source candidates from there (LEFT JOIN
+    # inventory for the current quantity) rather than from inventory rows.
     rows = db.execute(
         """
-        SELECT COALESCE(pv.name, i.barcode) AS name, pv.brand, i.quantity, i.minimum_quantity,
-               (i.minimum_quantity - i.quantity) AS shortfall
-        FROM inventory i
-        LEFT JOIN product_variants pv ON pv.barcode = i.barcode AND pv.retailer_id = ?
-        WHERE i.quantity < i.minimum_quantity
-        ORDER BY shortfall DESC, LOWER(COALESCE(pv.name, i.barcode))
+        SELECT pv.barcode,
+               COALESCE(pv.name, pv.barcode) AS name,
+               pv.brand,
+               COALESCE(inv.quantity, 0)     AS have,
+               pv.minimum_quantity           AS need
+        FROM product_variants pv
+        LEFT JOIN inventory inv
+               ON inv.barcode = pv.barcode AND inv.retailer_id = pv.retailer_id
+        WHERE pv.retailer_id = ? AND pv.minimum_quantity > 0
         """,
-        (retailer_id,)
+        (retailer_id,),
     ).fetchall()
 
-    items = [dict(r) for r in rows]
-    return {"items": items}
+    low_rows = [r for r in rows if is_low_stock(r["have"], r["need"])]
+    low_rows.sort(key=lambda r: (-shortfall(r["have"], r["need"]), r["name"].lower()))
+    products = [
+        {
+            "barcode": r["barcode"],
+            "name": r["name"],
+            "brand": r["brand"],
+            "have": r["have"],
+            "need": r["need"],
+            "short": shortfall(r["have"], r["need"]),
+            "product_page_url": product_page_url(r["barcode"], retailer_id),
+        }
+        for r in low_rows
+    ]
+
+    return {"groups": groups, "products": products}

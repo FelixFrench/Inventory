@@ -13,13 +13,16 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE inventory (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL, started_at TEXT NOT NULL, recovered_at TEXT);
-CREATE TABLE session_items (session_id INTEGER NOT NULL, barcode TEXT NOT NULL, delta INTEGER NOT NULL, info_status TEXT NOT NULL DEFAULT 'pending', price_status TEXT NOT NULL DEFAULT 'pending', first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
+CREATE TABLE session_items (session_id INTEGER NOT NULL, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, delta INTEGER NOT NULL, info_status TEXT NOT NULL DEFAULT 'pending', price_status TEXT NOT NULL DEFAULT 'pending', first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
 CREATE TABLE worker_state (id INTEGER PRIMARY KEY, off_last_called_at TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, minimum_quantity INTEGER NOT NULL DEFAULT 0 CHECK(minimum_quantity >= 0));
+CREATE TABLE group_variant_members (group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, PRIMARY KEY (group_id, barcode, retailer_id), FOREIGN KEY (barcode, retailer_id) REFERENCES product_variants(barcode, retailer_id) ON DELETE CASCADE);
+CREATE TABLE group_group_members (parent_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, child_group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE, PRIMARY KEY (parent_group_id, child_group_id), CHECK (parent_group_id != child_group_id));
 INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
 INSERT INTO worker_state (id, off_last_called_at) VALUES (1, '1970-01-01T00:00:00');
 """
@@ -67,17 +70,17 @@ def client_no_auth(db):
     app.dependency_overrides.clear()
 
 
-def _seed_item(db, barcode: str, name: str, brand: str = None,
-               quantity: int = 0, minimum_quantity: int = 0, price_pence: int = None,
-               product_url: str = None):
+def _seed_item(db, barcode: str, name: str, brand: str | None = None,
+               quantity: int = 0, minimum_quantity: int = 0, price_pence: int | None = None,
+               product_url: str | None = None):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
     db.execute(
-        "INSERT INTO product_variants (barcode, retailer_id, name, brand) VALUES (?, ?, ?, ?)",
-        (barcode, _RETAILER_ID, name, brand)
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, minimum_quantity) VALUES (?, ?, ?, ?, ?)",
+        (barcode, _RETAILER_ID, name, brand, minimum_quantity)
     )
     db.execute(
-        "INSERT INTO inventory (barcode, quantity, minimum_quantity) VALUES (?, ?, ?)",
-        (barcode, quantity, minimum_quantity)
+        "INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, ?)",
+        (barcode, _RETAILER_ID, quantity)
     )
     if price_pence is not None:
         db.execute(
@@ -152,8 +155,8 @@ def _seed_off_failed_item(db, barcode: str, quantity: int):
     """Insert a barcode+inventory row only — no product_variants, no prices."""
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
     db.execute(
-        "INSERT INTO inventory (barcode, quantity) VALUES (?, ?)",
-        (barcode, quantity)
+        "INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, ?)",
+        (barcode, _RETAILER_ID, quantity)
     )
     db.commit()
 
@@ -171,6 +174,34 @@ def test_inventory_off_failed_item_appears(client, db):
     assert item["brand"] is None
     assert item["price_pence"] is None
     assert item["line_total_pence"] is None
+
+
+def test_inventory_failed_off_variant_row_still_shows_barcode(client, db):
+    """Always-write-row (3a): an OFF failure now leaves a null-name product_variants row
+    (lookup_status='failed') instead of no row. The inventory report's COALESCE(name, barcode)
+    fallback must render the barcode identically — not an empty name — and add no spurious row."""
+    barcode = "5000000000098"
+    db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
+    db.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity, "
+        "lookup_status, lookup_failure_count, last_lookup_datetime) "
+        "VALUES (?, ?, NULL, NULL, NULL, 'failed', 1, '2026-07-21T10:00:00+00:00')",
+        (barcode, _RETAILER_ID),
+    )
+    db.execute(
+        "INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 2)",
+        (barcode, _RETAILER_ID),
+    )
+    db.commit()
+
+    resp = client.get("/reports/inventory")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 1        # no spurious/duplicate row
+    item = data["items"][0]
+    assert item["name"] == barcode        # barcode fallback, not ""
+    assert item["brand"] is None
+    assert item["price_pence"] is None
 
 
 def test_inventory_off_failed_item_contributes_zero_to_total(client, db):
@@ -200,25 +231,53 @@ def test_inventory_mixed_resolved_and_failed(client, db):
 # GET /reports/low-stock
 # ---------------------------------------------------------------------------
 
+def _seed_group(db, gid, name, minimum=0):
+    db.execute(
+        "INSERT INTO product_groups (id, name, minimum_quantity) VALUES (?, ?, ?)",
+        (gid, name, minimum),
+    )
+    db.commit()
+
+
+def _add_group_variant(db, gid, barcode):
+    db.execute(
+        "INSERT INTO group_variant_members (group_id, barcode, retailer_id) VALUES (?, ?, ?)",
+        (gid, barcode, _RETAILER_ID),
+    )
+    db.commit()
+
+
 def test_low_stock_none(client, db):
     _seed_item(db, "5000000000007", "Rice", quantity=5, minimum_quantity=2)
 
     resp = client.get("/reports/low-stock")
     assert resp.status_code == 200
-    assert resp.json() == {"items": []}
+    assert resp.json() == {"groups": [], "products": []}
 
 
-def test_low_stock_one_item(client, db):
+def test_low_stock_two_section_shape(client):
+    resp = client.get("/reports/low-stock")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert set(data.keys()) == {"groups", "products"}
+    assert data == {"groups": [], "products": []}
+
+
+def test_low_stock_one_product(client, db):
     _seed_item(db, "5000000000008", "Red Lentils", brand="Laila", quantity=1, minimum_quantity=3)
 
     resp = client.get("/reports/low-stock")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data["items"]) == 1
-    item = data["items"][0]
-    assert item["quantity"] == 1
-    assert item["minimum_quantity"] == 3
-    assert item["shortfall"] == 2
+    assert data["groups"] == []
+    assert len(data["products"]) == 1
+    item = data["products"][0]
+    assert item["barcode"] == "5000000000008"
+    assert item["name"] == "Red Lentils"
+    assert item["brand"] == "Laila"
+    assert item["have"] == 1
+    assert item["need"] == 3
+    assert item["short"] == 2
 
 
 def test_low_stock_excludes_exactly_at_minimum(client, db):
@@ -226,7 +285,7 @@ def test_low_stock_excludes_exactly_at_minimum(client, db):
 
     resp = client.get("/reports/low-stock")
     assert resp.status_code == 200
-    assert resp.json() == {"items": []}
+    assert resp.json()["products"] == []
 
 
 def test_low_stock_excludes_zero_minimum(client, db):
@@ -234,21 +293,66 @@ def test_low_stock_excludes_zero_minimum(client, db):
 
     resp = client.get("/reports/low-stock")
     assert resp.status_code == 200
-    assert resp.json() == {"items": []}
+    assert resp.json()["products"] == []
 
 
-def test_low_stock_sorted_by_shortfall_desc(client, db):
+def test_low_stock_products_sorted_by_short_desc(client, db):
     _seed_item(db, "5000000000011", "Item A", quantity=2, minimum_quantity=3)
     _seed_item(db, "5000000000012", "Item B", quantity=0, minimum_quantity=3)
 
     resp = client.get("/reports/low-stock")
     assert resp.status_code == 200
-    items = resp.json()["items"]
-    assert len(items) == 2
-    assert items[0]["name"] == "Item B"
-    assert items[0]["shortfall"] == 3
-    assert items[1]["name"] == "Item A"
-    assert items[1]["shortfall"] == 1
+    products = resp.json()["products"]
+    assert len(products) == 2
+    assert products[0]["name"] == "Item B"
+    assert products[0]["short"] == 3
+    assert products[1]["name"] == "Item A"
+    assert products[1]["short"] == 1
+
+
+def test_low_stock_group_below_minimum_appears(client, db):
+    _seed_item(db, "5000000000013", "Bean Can", quantity=2, minimum_quantity=0)
+    _seed_group(db, 1, "Beans", minimum=5)
+    _add_group_variant(db, 1, "5000000000013")
+
+    resp = client.get("/reports/low-stock")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["groups"]) == 1
+    g = data["groups"][0]
+    assert g["group_id"] == 1
+    assert g["name"] == "Beans"
+    assert g["have"] == 2
+    assert g["need"] == 5
+    assert g["short"] == 3
+    # The variant itself has minimum 0, so it does not appear in products.
+    assert data["products"] == []
+
+
+def test_low_stock_organisational_group_excluded(client, db):
+    """A group with minimum_quantity=0 never appears regardless of stock."""
+    _seed_item(db, "5000000000014", "Item", quantity=0, minimum_quantity=0)
+    _seed_group(db, 1, "Org Only", minimum=0)
+    _add_group_variant(db, 1, "5000000000014")
+
+    resp = client.get("/reports/low-stock")
+    assert resp.status_code == 200
+    assert resp.json()["groups"] == []
+
+
+def test_low_stock_group_and_member_both_appear(client, db):
+    """A variant and a group it belongs to are evaluated independently; both can appear."""
+    _seed_item(db, "5000000000015", "Shared Item", quantity=1, minimum_quantity=3)
+    _seed_group(db, 1, "Group X", minimum=5)
+    _add_group_variant(db, 1, "5000000000015")
+
+    resp = client.get("/reports/low-stock")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["groups"]) == 1
+    assert data["groups"][0]["short"] == 4   # 5 - 1
+    assert len(data["products"]) == 1
+    assert data["products"][0]["short"] == 2  # 3 - 1
 
 
 # ---------------------------------------------------------------------------
@@ -289,9 +393,9 @@ def _seed_session(db, session_id=1):
 
 def _seed_session_item(db, barcode, session_id=1, info_status='pending', price_status='pending'):
     db.execute(
-        """INSERT INTO session_items (session_id, barcode, delta, info_status, price_status, first_scanned_at)
-           VALUES (?, ?, 1, ?, ?, '2024-01-01T00:00:00')""",
-        (session_id, barcode, info_status, price_status),
+        """INSERT INTO session_items (session_id, barcode, retailer_id, delta, info_status, price_status, first_scanned_at)
+           VALUES (?, ?, ?, 1, ?, ?, '2024-01-01T00:00:00')""",
+        (session_id, barcode, _RETAILER_ID, info_status, price_status),
     )
     db.commit()
 
@@ -319,7 +423,39 @@ def test_unresolved_no_pv_row(client, db):
     assert item["barcode"] == bc
     assert item["name"]["label"] == "no_data"
     assert item["brand"]["label"] == "no_data"
-    assert item["weight"]["label"] == "no_data"
+    assert item["quantity"]["label"] == "no_data"
+    assert item["price"]["label"] == "missing"
+
+
+def test_label_for_info_field_no_data_vs_missing():
+    """Direct unit test of the I1 distinction: no variant row -> 'no_data'; variant row present
+    with a null field -> 'missing'. A failed-OFF barcode (now a null-data PV row) therefore
+    labels 'missing' where it previously labelled 'no_data'. Pending/failed session status
+    short-circuits both."""
+    from src.api.reports import _label_for_info_field
+
+    assert _label_for_info_field(None, False, None) == "no_data"      # no PV row
+    assert _label_for_info_field(None, True, None) == "missing"       # PV row, null field (I1)
+    assert _label_for_info_field(None, True, "Beans") == "resolved"   # PV row, value present
+    assert _label_for_info_field("pending", True, None) == "pending"  # session status wins
+    assert _label_for_info_field("failed", False, None) == "failed"   # session status wins
+
+
+def test_unresolved_null_data_carry_variant_row(client, db):
+    """A 1c null-data carry variant row (PV row present, all OFF fields null, no session item)
+    still renders the unresolved report without crashing. Its fields label 'missing' rather than
+    the no-variant 'no_data' — the I1 label shift arriving early via the orphan-carry path."""
+    bc = _BC(50)
+    _seed_barcode(db, bc)
+    _seed_pv(db, bc)  # name/brand/product_quantity all null — the carry-row shape
+
+    resp = client.get("/reports/unresolved")
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["barcode"] == bc
+    assert item["name"]["label"] == "missing"
+    assert item["brand"]["label"] == "missing"
+    assert item["quantity"]["label"] == "missing"
     assert item["price"]["label"] == "missing"
 
 
@@ -334,8 +470,8 @@ def test_unresolved_missing_name(client, db):
     assert item["name"]["label"] == "missing"
     assert item["brand"]["label"] == "resolved"
     assert item["brand"]["value"] == "Heinz"
-    assert item["weight"]["label"] == "resolved"
-    assert item["weight"]["value"] == "400g"
+    assert item["quantity"]["label"] == "resolved"
+    assert item["quantity"]["value"] == "400g"
 
 
 def test_unresolved_missing_price(client, db):
@@ -351,10 +487,13 @@ def test_unresolved_missing_price(client, db):
 
 
 def test_unresolved_per_kg(client, db):
+    """A per-kg row stores a NON-NULL £/kg price and is tagged price_type='per_kg'; it is
+    labelled 'per_kg' (not treated as 'no price') via the price_type signal, and its £/kg
+    value is carried through. Surfaces here because product_quantity is unresolved."""
     bc = _BC(4)
     _seed_barcode(db, bc)
     _seed_pv(db, bc, name="Loose Apples", brand="Farms", product_quantity=None)
-    _seed_price(db, bc, price_pence=None, price_type='per_kg')
+    _seed_price(db, bc, price_pence=250, price_type='per_kg')
 
     resp = client.get("/reports/unresolved")
     assert resp.status_code == 200
@@ -362,6 +501,31 @@ def test_unresolved_per_kg(client, db):
     price_items = [i for i in items if i["barcode"] == bc]
     assert len(price_items) == 1
     assert price_items[0]["price"]["label"] == "per_kg"
+    assert price_items[0]["price"]["value"] == 2.5  # the £/kg unit price, not "no price"
+
+
+def test_unresolved_null_price_is_missing_not_per_kg(client, db):
+    """A null price with a prices row means 'no successful lookup' (price_type='unit'),
+    so it labels 'missing' — the old null-price==per_kg inference is gone."""
+    bc = _BC(40)
+    _seed_barcode(db, bc)
+    _seed_pv(db, bc, name="Beans", brand="Heinz", product_quantity="415g")
+    _seed_price(db, bc, price_pence=None, price_type='unit')
+
+    resp = client.get("/reports/unresolved")
+    assert resp.status_code == 200
+    item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
+    assert item["price"]["label"] == "missing"
+
+
+def test_label_for_price_keys_off_price_type():
+    """Unit-test the detection helper directly: per_kg is signalled by price_type, and a
+    non-null unit price is 'resolved'."""
+    from src.api.reports import _label_for_price
+    assert _label_for_price('resolved', True, 250, 'per_kg') == 'per_kg'
+    assert _label_for_price('resolved', True, 150, 'unit') == 'resolved'
+    assert _label_for_price('resolved', True, None, 'unit') == 'missing'
+    assert _label_for_price('resolved', False, None, 'unit') == 'missing'
 
 
 def test_unresolved_fully_resolved_excluded(client, db):
@@ -400,7 +564,7 @@ def test_unresolved_session_pending(client, db):
     item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
     assert item["name"]["label"] == "pending"
     assert item["brand"]["label"] == "pending"
-    assert item["weight"]["label"] == "pending"
+    assert item["quantity"]["label"] == "pending"
     assert item["price"]["label"] == "pending"
 
 
@@ -415,7 +579,7 @@ def test_unresolved_session_failed_not_possible(client, db):
     item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
     assert item["name"]["label"] == "failed"
     assert item["brand"]["label"] == "failed"
-    assert item["weight"]["label"] == "failed"
+    assert item["quantity"]["label"] == "failed"
     assert item["price"]["label"] == "not_attempted"
 
 
@@ -431,7 +595,7 @@ def test_unresolved_session_resolved_info_price_pending(client, db):
     item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
     assert item["name"]["label"] == "resolved"
     assert item["brand"]["label"] == "resolved"
-    assert item["weight"]["label"] == "resolved"
+    assert item["quantity"]["label"] == "resolved"
     assert item["price"]["label"] == "pending"
 
 
@@ -447,7 +611,7 @@ def test_unresolved_session_failed_overrides_existing_pv(client, db):
     item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
     assert item["name"]["label"] == "failed"
     assert item["brand"]["label"] == "failed"
-    assert item["weight"]["label"] == "failed"
+    assert item["quantity"]["label"] == "failed"
 
 
 def test_unresolved_ordering_session_first(client, db):
@@ -481,7 +645,7 @@ def test_unresolved_inventory_quantity_from_row(client, db):
     _seed_barcode(db, bc)
     _seed_pv(db, bc, name=None, brand=None, product_quantity=None)
     db.execute(
-        "INSERT INTO inventory (barcode, quantity) VALUES (?, 5)", (bc,)
+        "INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 5)", (bc, _RETAILER_ID)
     )
     db.commit()
 
@@ -535,6 +699,47 @@ def test_inventory_price_url_present_when_set(client, db):
     resp = client.get("/reports/inventory")
     item = resp.json()["items"][0]
     assert item["price_url"] == url
+
+
+# ---------------------------------------------------------------------------
+# product_page_url / group_page_url in reports (internal page links)
+# ---------------------------------------------------------------------------
+
+def test_inventory_includes_product_page_url(client, db):
+    bc = "7000000000005"
+    _seed_item(db, bc, "Butter", quantity=1, price_pence=150)
+
+    resp = client.get("/reports/inventory")
+    item = resp.json()["items"][0]
+    assert item["product_page_url"] == f"/product.html?barcode={bc}&retailer_id=1"
+
+
+def test_unresolved_includes_product_page_url(client, db):
+    bc = _BC(30)
+    _seed_barcode(db, bc)
+
+    resp = client.get("/reports/unresolved")
+    item = next(i for i in resp.json()["items"] if i["barcode"] == bc)
+    assert item["product_page_url"] == f"/product.html?barcode={bc}&retailer_id=1"
+
+
+def test_low_stock_products_include_product_page_url(client, db):
+    bc = "7000000000006"
+    _seed_item(db, bc, "Red Lentils", quantity=1, minimum_quantity=3)
+
+    resp = client.get("/reports/low-stock")
+    item = resp.json()["products"][0]
+    assert item["product_page_url"] == f"/product.html?barcode={bc}&retailer_id=1"
+
+
+def test_low_stock_groups_include_group_page_url(client, db):
+    _seed_item(db, "7000000000007", "Bean Can", quantity=2, minimum_quantity=0)
+    _seed_group(db, 3, "Beans", minimum=5)
+    _add_group_variant(db, 3, "7000000000007")
+
+    resp = client.get("/reports/low-stock")
+    g = resp.json()["groups"][0]
+    assert g["group_page_url"] == "/group.html?id=3"
 
 
 # ---------------------------------------------------------------------------

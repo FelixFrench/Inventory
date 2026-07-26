@@ -14,11 +14,11 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, lookup_status TEXT NOT NULL DEFAULT 'pending' CHECK(lookup_status IN ('pending', 'resolved', 'failed')), lookup_failure_count INTEGER NOT NULL DEFAULT 0 CHECK(lookup_failure_count >= 0), last_lookup_datetime TEXT, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
-CREATE TABLE inventory (barcode TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0, minimum_quantity INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE inventory (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
-CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode));
+CREATE TABLE session_items (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, barcode TEXT NOT NULL REFERENCES barcodes(barcode), retailer_id INTEGER NOT NULL, delta INTEGER NOT NULL CHECK(delta >= 0), info_status TEXT NOT NULL DEFAULT 'pending' CHECK(info_status IN ('pending', 'resolved', 'failed')), price_status TEXT NOT NULL DEFAULT 'pending' CHECK(price_status IN ('pending', 'resolved', 'failed', 'not_possible')), first_scanned_at TEXT NOT NULL, PRIMARY KEY (session_id, barcode, retailer_id));
 CREATE TABLE worker_state (id INTEGER PRIMARY KEY CHECK(id = 1), off_last_called_at TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO retailers (name, scraper_class) VALUES ('Sainsbury''s', 'SainsburysProvider');
@@ -93,9 +93,9 @@ def _seed_item(db, barcode, session_id, delta=1,
                name=None, brand=None, product_quantity=None, price_pence=None, product_url=None):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (barcode,))
     db.execute(
-        "INSERT INTO session_items (session_id, barcode, delta, info_status, price_status, first_scanned_at) "
-        "VALUES (?, ?, ?, ?, ?, '2026-05-27T10:00:00')",
-        (session_id, barcode, delta, info_status, price_status)
+        "INSERT INTO session_items (session_id, barcode, retailer_id, delta, info_status, price_status, first_scanned_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, '2026-05-27T10:00:00')",
+        (session_id, barcode, _RETAILER_ID, delta, info_status, price_status)
     )
     if name is not None:
         db.execute(
@@ -173,11 +173,11 @@ def test_get_session_with_items(client, db):
     assert item["delta"] == 2
     assert item["name"] == {"value": "Baked Beans", "status": "resolved"}
     assert item["brand"] == {"value": "Heinz", "status": "resolved"}
-    assert item["weight"] == {"value": "415g", "status": "resolved"}
+    assert item["quantity"] == {"value": "415g", "status": "resolved"}
     assert item["price"] == {"value": 1.23, "status": "resolved"}
 
 
-def test_get_session_weight_kilograms(client, db):
+def test_get_session_quantity_kilograms(client, db):
     session_id = _start_session(client, "in")
     _seed_item(db, _BARCODE, session_id, delta=1,
                info_status="resolved", price_status="resolved",
@@ -186,7 +186,7 @@ def test_get_session_weight_kilograms(client, db):
     resp = client.get("/session")
     assert resp.status_code == 200
     item = resp.json()["session"]["items"][0]
-    assert item["weight"] == {"value": "1.5kg", "status": "resolved"}
+    assert item["quantity"] == {"value": "1.5kg", "status": "resolved"}
 
 
 def test_get_session_status_loading(client, db):
@@ -234,7 +234,7 @@ def test_confirm_scan_in_increments_inventory(client, db):
 
 def test_confirm_scan_out_decrements_inventory(client, db):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
-    db.execute("INSERT INTO inventory (barcode, quantity) VALUES (?, 10)", (_BARCODE,))
+    db.execute("INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 10)", (_BARCODE, _RETAILER_ID))
     db.commit()
     session_id = _start_session(client, "out")
     _seed_item(db, _BARCODE, session_id, delta=3,
@@ -290,13 +290,35 @@ def test_confirm_pending_check_inside_transaction(client, db):
     ).fetchone() is not None
 
 
+def test_confirm_unaffected_by_durable_lookup_columns(client, db):
+    """The confirm gate reads only session_items pending statuses. A failed-OFF item (terminal
+    info='failed'/price='not_possible') with a null-data, lookup_status='failed' product_variants
+    row present must still be confirmable — the durable columns are not consulted."""
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=2,
+               info_status="failed", price_status="not_possible")
+    db.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity, "
+        "lookup_status, lookup_failure_count) VALUES (?, ?, NULL, NULL, NULL, 'failed', 1)",
+        (_BARCODE, _RETAILER_ID),
+    )
+    db.commit()
+
+    resp = client.post("/session/confirm")
+    assert resp.status_code == 200
+    assert resp.json()["applied_items"] == 1
+    qty = db.execute("SELECT quantity FROM inventory WHERE barcode = ?", (_BARCODE,)).fetchone()
+    assert qty["quantity"] == 2
+    assert db.execute("SELECT id FROM sessions LIMIT 1").fetchone() is None
+
+
 # ---------------------------------------------------------------------------
 # Test 13: Scan-out would go negative
 # ---------------------------------------------------------------------------
 
 def test_confirm_scan_out_would_go_negative(client, db):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
-    db.execute("INSERT INTO inventory (barcode, quantity) VALUES (?, 1)", (_BARCODE,))
+    db.execute("INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 1)", (_BARCODE, _RETAILER_ID))
     db.commit()
     session_id = _start_session(client, "out")
     _seed_item(db, _BARCODE, session_id, delta=5,
@@ -362,7 +384,7 @@ def test_confirm_zero_delta_item_skipped(client, db):
 
 def test_discard_active_session(client, db):
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
-    db.execute("INSERT INTO inventory (barcode, quantity) VALUES (?, 5)", (_BARCODE,))
+    db.execute("INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 5)", (_BARCODE, _RETAILER_ID))
     db.commit()
     session_id = _start_session(client)
     _seed_item(db, _BARCODE, session_id)
@@ -425,15 +447,15 @@ def test_put_delta_updates_row(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 4})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 4})
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["barcode"] == _BARCODE
     assert data["delta"] == 4
     row = db.execute(
-        "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ?",
-        (session_id, _BARCODE)
+        "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ? AND retailer_id = ?",
+        (session_id, _BARCODE, _RETAILER_ID)
     ).fetchone()
     assert row["delta"] == 4
 
@@ -445,13 +467,13 @@ def test_put_delta_zero_allowed(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 0})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 0})
 
     assert resp.status_code == 200
     assert resp.json()["delta"] == 0
     row = db.execute(
-        "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ?",
-        (session_id, _BARCODE)
+        "SELECT delta FROM session_items WHERE session_id = ? AND barcode = ? AND retailer_id = ?",
+        (session_id, _BARCODE, _RETAILER_ID)
     ).fetchone()
     assert row is not None
     assert row["delta"] == 0
@@ -463,7 +485,7 @@ def test_put_delta_negative_rejected(client, db):
     _seed_item(db, _BARCODE, session_id, delta=2,
                info_status="resolved", price_status="resolved")
 
-    resp = client.put(f"/session/items/{_BARCODE}", json={"delta": -1})
+    resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": -1})
     assert resp.status_code == 422
 
 
@@ -473,7 +495,7 @@ def test_put_delta_barcode_not_in_session(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 2})
 
     assert resp.status_code == 404
     assert resp.json()["detail"]["error"] == "item_not_found"
@@ -483,7 +505,7 @@ def test_put_delta_barcode_not_in_session(client, db):
 def test_put_delta_no_active_session(client, db):
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 2})
 
     assert resp.status_code == 409
     assert resp.json()["detail"]["error"] == "no_active_session"
@@ -499,7 +521,7 @@ def test_put_delta_session_total_correct(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 1})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 1})
 
     assert resp.status_code == 200
     assert resp.json()["session_total_delta"] == 3  # 1 + 2
@@ -528,13 +550,14 @@ def test_put_delta_broadcasts_delta_update(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 5})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 5})
 
     assert resp.status_code == 200
     mock_mgr.broadcast.assert_called_once()
     payload = json.loads(mock_mgr.broadcast.call_args[0][0])
     assert payload["type"] == "delta_update"
     assert payload["barcode"] == _BARCODE
+    assert payload["retailer"] == 1
     assert payload["session_delta"] == 5
     assert payload["session_total_delta"] == 5
 
@@ -542,7 +565,7 @@ def test_put_delta_broadcasts_delta_update(client, db):
 def test_put_delta_no_broadcast_no_session(client, db):
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 2})
 
     assert resp.status_code == 409
     mock_mgr.broadcast.assert_not_called()
@@ -553,10 +576,24 @@ def test_put_delta_no_broadcast_item_not_found(client, db):
 
     with patch("src.api.routers.session.manager") as mock_mgr:
         mock_mgr.broadcast = AsyncMock()
-        resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 2})
+        resp = client.put(f"/session/items/{_BARCODE}/{_RETAILER_ID}", json={"delta": 2})
 
     assert resp.status_code == 404
     mock_mgr.broadcast.assert_not_called()
+
+
+def test_put_delta_old_barcode_only_path_gone(client, db):
+    """The pre-2e barcode-only override URL must no longer reach the override handler.
+    The route is now /session/items/{barcode}/{retailer_id}; the single-segment path
+    matches no API route and falls through to the StaticFiles(html=True) catch-all mounted
+    at '/', which permits only GET/HEAD → 405. The point is that a PUT to the old URL no
+    longer resolves to the override (never 200), not the exact fall-through code."""
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved")
+
+    resp = client.put(f"/session/items/{_BARCODE}", json={"delta": 4})
+    assert resp.status_code == 405
 
 
 # ---------------------------------------------------------------------------
@@ -568,13 +605,16 @@ def test_get_session_item_includes_inventory_quantity(client, db):
     _seed_item(db, _BARCODE, session_id, delta=1,
                info_status="resolved", price_status="resolved")
     db.execute("INSERT OR IGNORE INTO barcodes (barcode) VALUES (?)", (_BARCODE,))
-    db.execute("INSERT INTO inventory (barcode, quantity) VALUES (?, 4)", (_BARCODE,))
+    db.execute("INSERT INTO inventory (barcode, retailer_id, quantity) VALUES (?, ?, 4)", (_BARCODE, _RETAILER_ID))
     db.commit()
 
     resp = client.get("/session")
     assert resp.status_code == 200
     item = resp.json()["session"]["items"][0]
     assert item["inventory_quantity"] == 4
+    # Each item carries its composite-key retailer (added in 2e); the frontend keys
+    # feed rows on rowKey(barcode, retailer) when restoring a session from this response.
+    assert item["retailer"] == _RETAILER_ID
 
 
 def test_get_session_item_inventory_quantity_defaults_to_zero(client, db):
@@ -606,6 +646,17 @@ def test_get_session_item_off_url_view_when_resolved(client, db):
     resp = client.get("/session")
     item = resp.json()["session"]["items"][0]
     assert item["off_url"] == _OFF_VIEW.format(_BARCODE)
+
+
+def test_get_session_item_includes_product_page_url(client, db):
+    session_id = _start_session(client, "in")
+    _seed_item(db, _BARCODE, session_id, delta=1,
+               info_status="resolved", price_status="resolved",
+               name="Baked Beans", brand="Heinz", product_quantity="415g", price_pence=123)
+
+    resp = client.get("/session")
+    item = resp.json()["session"]["items"][0]
+    assert item["product_page_url"] == f"/product.html?barcode={_BARCODE}&retailer_id=1"
 
 
 def test_get_session_item_off_url_add_when_failed(client, db):
@@ -657,4 +708,5 @@ def test_get_session_recovered_at_appears_in_response(client, db):
     assert resp.status_code == 200
     data = resp.json()["session"]
     assert data["recovered_at"] == "2026-06-01T09:00:00"
+    assert data["retailer"] == 1
 
