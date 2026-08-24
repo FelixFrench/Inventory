@@ -3,6 +3,7 @@ import os
 import textwrap
 from datetime import datetime
 
+from escpos.exceptions import BarcodeCodeError, BarcodeTypeError
 from escpos.printer import Dummy, Network
 
 logger = logging.getLogger(__name__)
@@ -196,6 +197,99 @@ def print_inventory(report_data: dict) -> None:
 
 def print_low_stock(report_data: dict) -> None:
     raw = _format_low_stock(report_data)
+    p = _get_printer()
+    try:
+        p._raw(raw)
+    except Exception as e:
+        raise PrinterUnavailableError(f"Print failed: {e}") from e
+    finally:
+        try:
+            p.close()
+        except Exception:
+            pass
+
+
+def _gs1_check_digit_valid(digits: str) -> bool:
+    """Standard GS1 mod-10 check digit, used by EAN-8, UPC-A and EAN-13 alike.
+
+    Sum the payload digits (all but the last) from the right, alternating weights
+    3 and 1 starting with 3 on the rightmost payload digit; the check digit is
+    ``(10 - total % 10) % 10``.
+    """
+    payload, check = digits[:-1], int(digits[-1])
+    total = sum(int(d) * (3 if i % 2 == 0 else 1) for i, d in enumerate(reversed(payload)))
+    return (10 - total % 10) % 10 == check
+
+
+def choose_barcode_symbology(barcode: str) -> str:
+    """Pick the shortest native symbology whose length and GS1 check digit both match.
+
+    Falls back to CODE128 for any other length, and for a length-matching code
+    whose check digit is invalid (e.g. a synthetic stand-in) — CODE128 is always
+    scannable regardless of the digit string, which is the property this feature
+    depends on.
+    """
+    length_to_symbology = {8: "EAN8", 12: "UPCA", 13: "EAN13"}
+    symbology = length_to_symbology.get(len(barcode))
+    if symbology is not None and _gs1_check_digit_valid(barcode):
+        return symbology
+    return "CODE128"
+
+
+def _format_product_print(product: dict) -> bytes:
+    """Render one product's name/brand/quantity plus a scannable barcode, uncut.
+
+    Meant to be printed alongside other products' fragments onto one uncut strip
+    (see ``_format_cut``), so alignment is reset to left up front and a trailing
+    blank line separates this fragment from the next one on the same strip.
+    """
+    p = Dummy(magic_encode_args={"disabled": True, "encoding": "CP437"})
+    p.set(align="left", bold=False)
+
+    for field in ("name", "brand", "quantity"):
+        value = product.get(field)
+        if value:
+            p.text(_safe_ident(str(value)) + "\n")
+
+    barcode = product["barcode"]
+    symbology = choose_barcode_symbology(barcode)
+    payload = f"{{B{barcode}" if symbology == "CODE128" else barcode
+    try:
+        p.barcode(payload, symbology, height=64, width=3, pos="OFF", align_ct=True)
+    except (BarcodeCodeError, BarcodeTypeError) as e:
+        logger.warning("Barcode render failed for %s (%s): %s", barcode, symbology, e)
+
+    # The barcode's own HRI is disabled (pos="OFF") so the legible number below is always
+    # this explicit, sanitised text line — deterministic regardless of symbology or
+    # whether the barcode render above succeeded.
+    p.set(align="left", bold=False)
+    p.text(_safe_ident(barcode) + "\n")
+    p.text("\n")
+    return p.output
+
+
+def _format_cut() -> bytes:
+    p = Dummy(magic_encode_args={"disabled": True, "encoding": "CP437"})
+    p.cut()
+    return p.output
+
+
+def print_product(product: dict) -> None:
+    raw = _format_product_print(product)
+    p = _get_printer()
+    try:
+        p._raw(raw)
+    except Exception as e:
+        raise PrinterUnavailableError(f"Print failed: {e}") from e
+    finally:
+        try:
+            p.close()
+        except Exception:
+            pass
+
+
+def print_cut() -> None:
+    raw = _format_cut()
     p = _get_printer()
     try:
         p._raw(raw)

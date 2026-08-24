@@ -419,6 +419,41 @@ async function requestSessionDecrement() {
     }
 }
 
+// --- Print / Cut ----------------------------------------------------------
+// Print sends this one product's name/brand/quantity + a scannable barcode to the receipt
+// printer as an uncut fragment; several products can be printed onto one strip before a single
+// Cut. Both are independent of session state and always available.
+
+async function printErrorMessage(resp) {
+    const body = await resp.json().catch(() => ({}));
+    if (body.error === 'printer_not_configured') {
+        return 'Printer not configured';
+    }
+    return 'Could not print';
+}
+
+async function requestPrint() {
+    try {
+        const resp = await api(`/print/product/${encodeURIComponent(BARCODE)}/${encodeURIComponent(RETAILER_ID)}`, {
+            method: 'POST',
+        });
+        if (!resp.ok) throw new Error(await printErrorMessage(resp));
+        showToast('Printed ✓', 'ok');
+    } catch (e) {
+        showToast(e.message || 'Could not print', 'error');
+    }
+}
+
+async function requestCut() {
+    try {
+        const resp = await api('/print/cut', { method: 'POST' });
+        if (!resp.ok) throw new Error(await printErrorMessage(resp));
+        showToast('Cut ✓', 'ok');
+    } catch (e) {
+        showToast(e.message || 'Could not cut', 'error');
+    }
+}
+
 // --- Wiring (browser only; guarded so the module can be required in node --test) -----------------
 if (typeof document !== 'undefined') {
     // Event delegation for per-row remove buttons (the list re-renders on every change).
@@ -429,6 +464,8 @@ if (typeof document !== 'undefined') {
     document.getElementById('min-save').addEventListener('click', saveMinimum);
     document.getElementById('add-group-btn').addEventListener('click', addToGroup);
     document.getElementById('refresh-btn').addEventListener('click', requestManualRefresh);
+    document.getElementById('print-btn').addEventListener('click', requestPrint);
+    document.getElementById('cut-btn').addEventListener('click', requestCut);
     document.getElementById('session-plus-btn').addEventListener('click', requestSessionIncrement);
     document.getElementById('session-minus-btn').addEventListener('click', requestSessionDecrement);
 

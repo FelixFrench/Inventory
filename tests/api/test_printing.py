@@ -6,15 +6,25 @@ from unittest.mock import MagicMock, patch
 import pytest
 from starlette.testclient import TestClient
 
+from escpos.exceptions import BarcodeCodeError
+
 from src.api.dependencies import get_db, verify_api_key
 from src.api.main import app
-from src.api.printer import PrinterUnavailableError, _format_inventory, _format_low_stock, _get_printer
+from src.api.printer import (
+    PrinterUnavailableError,
+    _format_cut,
+    _format_inventory,
+    _format_low_stock,
+    _format_product_print,
+    _get_printer,
+    choose_barcode_symbology,
+)
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE retailers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, scraper_class TEXT NOT NULL);
 CREATE TABLE barcodes (barcode TEXT PRIMARY KEY);
-CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
+CREATE TABLE product_variants (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, name TEXT, brand TEXT, product_quantity TEXT, minimum_quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE prices (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, price_pence INTEGER, price_type TEXT NOT NULL DEFAULT 'unit', product_url TEXT NULL, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE inventory (barcode TEXT NOT NULL, retailer_id INTEGER NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (barcode, retailer_id));
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, type TEXT NOT NULL CHECK(type IN ('in', 'out')), started_at TEXT NOT NULL, recovered_at TEXT);
@@ -379,3 +389,184 @@ def test_normal_length_name_is_not_truncated():
     # Every word of the name survives (it is wrapped, so match word by word).
     for word in name.replace(",", "").split():
         assert word.encode("cp437") in out, f"{word!r} was lost from the receipt"
+
+
+# ---------------------------------------------------------------------------
+# choose_barcode_symbology — GS1 mod-10 known-good / known-bad codes per branch
+# ---------------------------------------------------------------------------
+
+def test_choose_barcode_symbology_ean8_valid():
+    assert choose_barcode_symbology("73513537") == "EAN8"
+
+
+def test_choose_barcode_symbology_ean8_bad_checksum_falls_back():
+    assert choose_barcode_symbology("73513538") == "CODE128"
+
+
+def test_choose_barcode_symbology_upca_valid():
+    assert choose_barcode_symbology("036000291452") == "UPCA"
+
+
+def test_choose_barcode_symbology_upca_bad_checksum_falls_back():
+    assert choose_barcode_symbology("036000291453") == "CODE128"
+
+
+def test_choose_barcode_symbology_ean13_valid():
+    assert choose_barcode_symbology("4006381333931") == "EAN13"
+
+
+def test_choose_barcode_symbology_ean13_bad_checksum_falls_back():
+    assert choose_barcode_symbology("4006381333932") == "CODE128"
+
+
+@pytest.mark.parametrize("length", [9, 10, 11, 14])
+def test_choose_barcode_symbology_other_lengths_fall_back(length):
+    assert choose_barcode_symbology("1" * length) == "CODE128"
+
+
+# ---------------------------------------------------------------------------
+# _format_product_print — text fields, per-symbology barcode, no cut
+# ---------------------------------------------------------------------------
+
+# GS V is the "cut paper" command family (GS V 0 = full cut, GS V 1 = partial cut);
+# verified directly against this printer/lib combination: _format_cut() emits b"\x1dV\x00".
+_GS_CUT = b"\x1dV"
+
+
+def test_format_product_print_text_fields():
+    out = _format_product_print(
+        {"barcode": "4006381333931", "name": "Baked Beans", "brand": "Heinz", "quantity": "400g"}
+    )
+    assert b"Baked Beans" in out
+    assert b"Heinz" in out
+    assert b"400g" in out
+
+
+def test_format_product_print_ean13_emits_ean13_barcode_and_no_cut():
+    out = _format_product_print(
+        {"barcode": "4006381333931", "name": "Beans", "brand": None, "quantity": None}
+    )
+    assert b"4006381333931" in out  # the explicit legible number-below line
+    assert _GS_CUT not in out
+    assert b"{B" not in out  # CODE128 code-set prefix must not appear on the EAN13 path
+
+
+def test_format_product_print_bad_checksum_emits_code128_and_no_cut():
+    out = _format_product_print(
+        {"barcode": "4006381333932", "name": "Beans", "brand": None, "quantity": None}
+    )
+    assert b"{B4006381333932" in out  # CODE128 payload carries the code-set B prefix
+    assert b"4006381333932" in out  # the explicit legible number-below line (no prefix)
+    assert _GS_CUT not in out
+
+
+def test_format_product_print_null_fields_do_not_print_the_word_none():
+    """The core case: a stand-in barcode with no resolved variant (all fields null)."""
+    out = _format_product_print(
+        {"barcode": "4006381333931", "name": None, "brand": None, "quantity": None}
+    )
+    assert b"4006381333931" in out
+    assert b"None" not in out
+
+
+def test_format_product_print_barcode_render_failure_falls_back_to_text():
+    """A render failure must not raise, and the digits must still be legible as text."""
+    with patch("src.api.printer.Dummy.barcode", side_effect=BarcodeCodeError("bad code")):
+        out = _format_product_print(
+            {"barcode": "4006381333931", "name": "Beans", "brand": None, "quantity": None}
+        )
+    assert isinstance(out, bytes)
+    assert b"Beans" in out
+    assert b"4006381333931" in out
+    assert _GS_CUT not in out
+
+
+def test_format_product_print_control_characters_are_bounded():
+    out_hostile = _format_product_print(
+        {"barcode": "4006381333931", "name": _HOSTILE, "brand": None, "quantity": None}
+    )
+    out_benign = _format_product_print(
+        {"barcode": "4006381333931", "name": "Beans", "brand": None, "quantity": None}
+    )
+    _assert_no_escpos_injection(out_hostile, out_benign, "a product name")
+
+
+# ---------------------------------------------------------------------------
+# _format_cut — emits a cut, no product content
+# ---------------------------------------------------------------------------
+
+def test_format_cut_emits_a_cut():
+    out = _format_cut()
+    assert _GS_CUT in out
+
+
+# ---------------------------------------------------------------------------
+# POST /print/product/{barcode}/{retailer_id} and POST /print/cut — endpoint tests
+# ---------------------------------------------------------------------------
+
+def _insert_variant(db, barcode, name="Beans", brand="Heinz", quantity="400g"):
+    db.execute("INSERT INTO barcodes (barcode) VALUES (?)", (barcode,))
+    db.execute(
+        "INSERT INTO product_variants (barcode, retailer_id, name, brand, product_quantity) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (barcode, _RETAILER_ID, name, brand, quantity),
+    )
+    db.commit()
+
+
+def test_post_print_product_200(client, db):
+    _insert_variant(db, "4006381333931")
+    with patch("src.api.printer.print_product", MagicMock(return_value=None)):
+        res = client.post("/print/product/4006381333931/1")
+    assert res.status_code == 200
+    assert res.json() == {"printed": True}
+
+
+def test_post_print_product_barcode_not_found(client, db):
+    with patch("src.api.printer.print_product", MagicMock(return_value=None)):
+        res = client.post("/print/product/00000000/1")
+    assert res.status_code == 404
+    assert res.json() == {"error": "barcode_not_found"}
+
+
+def test_post_print_product_retailer_not_found(client, db):
+    _insert_variant(db, "4006381333931")
+    with patch("src.api.printer.print_product", MagicMock(return_value=None)):
+        res = client.post("/print/product/4006381333931/999")
+    assert res.status_code == 404
+    assert res.json() == {"error": "retailer_not_found"}
+
+
+def test_post_print_product_503_not_configured(client, db):
+    _insert_variant(db, "4006381333931")
+    err = PrinterUnavailableError("not set", code="printer_not_configured")
+    with patch("src.api.printer.print_product", side_effect=err):
+        res = client.post("/print/product/4006381333931/1")
+    assert res.status_code == 503
+    assert res.json() == {"error": "printer_not_configured"}
+
+
+def test_post_print_product_401_no_auth(client_no_auth, db):
+    _insert_variant(db, "4006381333931")
+    res = client_no_auth.post("/print/product/4006381333931/1")
+    assert res.status_code == 401
+
+
+def test_post_print_cut_200(client):
+    with patch("src.api.printer.print_cut", MagicMock(return_value=None)):
+        res = client.post("/print/cut")
+    assert res.status_code == 200
+    assert res.json() == {"printed": True}
+
+
+def test_post_print_cut_503_not_configured(client):
+    err = PrinterUnavailableError("not set", code="printer_not_configured")
+    with patch("src.api.printer.print_cut", side_effect=err):
+        res = client.post("/print/cut")
+    assert res.status_code == 503
+    assert res.json() == {"error": "printer_not_configured"}
+
+
+def test_post_print_cut_401_no_auth(client_no_auth):
+    res = client_no_auth.post("/print/cut")
+    assert res.status_code == 401
