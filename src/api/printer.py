@@ -244,12 +244,17 @@ def _format_product_print(product: dict) -> bytes:
     blank line separates this fragment from the next one on the same strip.
     """
     p = Dummy(magic_encode_args={"disabled": True, "encoding": "CP437"})
+    COLS = p.profile.get_columns(font="a")
     p.set(align="left", bold=False)
 
     for field in ("name", "brand", "quantity"):
         value = product.get(field)
         if value:
-            p.text("  " + _safe_ident(str(value)) + "\n")
+            # Wrap explicitly (rather than let the printer hard-wrap p.text()'s raw output)
+            # so the 2-character margin lands on every physical line, not just the first.
+            lines = textwrap.wrap(_safe_ident(str(value)), COLS - 2) or [""]
+            for line in lines:
+                p.text("  " + line + "\n")
 
     barcode = product["barcode"]
     symbology = choose_barcode_symbology(barcode)
