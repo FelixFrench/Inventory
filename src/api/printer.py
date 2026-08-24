@@ -249,7 +249,7 @@ def _format_product_print(product: dict) -> bytes:
     for field in ("name", "brand", "quantity"):
         value = product.get(field)
         if value:
-            p.text(_safe_ident(str(value)) + "\n")
+            p.text("  " + _safe_ident(str(value)) + "\n")
 
     barcode = product["barcode"]
     symbology = choose_barcode_symbology(barcode)
@@ -261,9 +261,11 @@ def _format_product_print(product: dict) -> bytes:
 
     # The barcode's own HRI is disabled (pos="OFF") so the legible number below is always
     # this explicit, sanitised text line — deterministic regardless of symbology or
-    # whether the barcode render above succeeded.
+    # whether the barcode render above succeeded. Centred to sit under the (centred)
+    # barcode, with a 2-character margin either side.
+    p.set(align="center", bold=False)
+    p.text("  " + _safe_ident(barcode) + "  \n")
     p.set(align="left", bold=False)
-    p.text(_safe_ident(barcode) + "\n")
     p.text("\n")
     return p.output
 
